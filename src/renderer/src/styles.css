@@ -558,7 +558,7 @@ p {
 
 .hotkey-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(180px, auto) auto;
   align-items: center;
   gap: 12px;
   min-height: 70px;
@@ -602,9 +602,16 @@ p {
   white-space: nowrap;
 }
 
-.hotkey-row kbd {
+.hotkey-scope.is-error {
+  border-color: rgba(217, 68, 68, 0.22);
+  background: rgba(217, 68, 68, 0.08);
+  color: var(--danger);
+}
+
+.hotkey-recorder {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-height: 32px;
   border: 1px solid rgba(45, 63, 84, 0.16);
   border-bottom-color: rgba(45, 63, 84, 0.28);
@@ -612,9 +619,26 @@ p {
   background: rgba(255, 255, 255, 0.84);
   color: var(--text);
   padding: 0 10px;
+  cursor: pointer;
   font-size: 12px;
   font-weight: 760;
   white-space: nowrap;
+}
+
+.hotkey-recorder.is-recording {
+  border-color: rgba(18, 185, 129, 0.36);
+  background: rgba(18, 185, 129, 0.12);
+  color: var(--accent-strong);
+}
+
+.hotkey-error {
+  margin: 0;
+  border: 1px solid rgba(217, 68, 68, 0.2);
+  border-radius: 12px;
+  background: rgba(217, 68, 68, 0.08);
+  color: var(--danger);
+  padding: 10px 12px;
+  font-size: 13px;
 }
 
 .selector-overlay {

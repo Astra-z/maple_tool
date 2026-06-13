@@ -1,7 +1,19 @@
-export const CLOSE_LENS_SHORTCUT = 'CommandOrControl+Shift+M'
-export const CLOSE_LENS_SHORTCUT_LABEL = 'Ctrl / Command + Shift + M'
-export const CLOSE_TIMER_SHORTCUT = 'CommandOrControl+Shift+T'
-export const CLOSE_TIMER_SHORTCUT_LABEL = 'Ctrl / Command + Shift + T'
+export const HOTKEY_ACTIONS = ['lensToggle', 'timerToggle'] as const
+
+export const DEFAULT_HOTKEY_SETTINGS = {
+  lensToggle: 'CommandOrControl+Shift+M',
+  timerToggle: 'CommandOrControl+Shift+T'
+} as const
+
+export type HotkeyAction = (typeof HOTKEY_ACTIONS)[number]
+
+export type HotkeySettings = Record<HotkeyAction, string>
+
+export type HotkeyState = {
+  settings: HotkeySettings
+  registered: Record<HotkeyAction, boolean>
+  error: string | null
+}
 
 export const TIMER_FONT_OPTIONS = [
   {
@@ -45,6 +57,11 @@ export type LensConfig = {
   display: DisplayInfo
   region: Rect
   settings: LensSettings
+}
+
+export type LensState = {
+  config: LensConfig | null
+  isOpen: boolean
 }
 
 export type ScreenSource = {

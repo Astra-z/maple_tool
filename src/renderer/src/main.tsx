@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import {
   Aperture,
-  BellRinging,
   ClockCountdown,
   Crosshair,
   Eye,
@@ -11,16 +10,24 @@ import {
   Keyboard,
   LockKey,
   LockKeyOpen,
-  MapTrifold,
   MusicNote,
   Play,
   Selection,
-  SlidersHorizontal,
   Stop,
   X
 } from '@phosphor-icons/react'
-import { CLOSE_LENS_SHORTCUT_LABEL, CLOSE_TIMER_SHORTCUT_LABEL, TIMER_FONT_OPTIONS } from '../../shared/types'
-import type { DisplayInfo, LensConfig, LensSettings, SelectionPayload, TimerSettings, TimerState } from '../../shared/types'
+import { DEFAULT_HOTKEY_SETTINGS, TIMER_FONT_OPTIONS } from '../../shared/types'
+import type {
+  DisplayInfo,
+  HotkeyAction,
+  HotkeyState,
+  LensConfig,
+  LensSettings,
+  LensState,
+  SelectionPayload,
+  TimerSettings,
+  TimerState
+} from '../../shared/types'
 import './styles.css'
 
 type MainTool = 'lens' | 'timer' | 'hotkeys'
@@ -44,6 +51,20 @@ const defaultTimerState: TimerState = {
   isOpen: false,
   isRunning: false,
   remainingSeconds: defaultTimerSettings.intervalSeconds
+}
+
+const defaultLensState: LensState = {
+  config: null,
+  isOpen: false
+}
+
+const defaultHotkeyState: HotkeyState = {
+  settings: { ...DEFAULT_HOTKEY_SETTINGS },
+  registered: {
+    lensToggle: false,
+    timerToggle: false
+  },
+  error: null
 }
 
 let timerAudioContext: AudioContext | null = null
@@ -94,6 +115,76 @@ function normalizeTimerState(state: TimerState): TimerState {
   }
 }
 
+function normalizeLensState(state: LensState): LensState {
+  return {
+    config: state.config ?? null,
+    isOpen: Boolean(state.isOpen)
+  }
+}
+
+function normalizeHotkeyState(state: HotkeyState): HotkeyState {
+  return {
+    settings: {
+      ...DEFAULT_HOTKEY_SETTINGS,
+      ...state.settings
+    },
+    registered: {
+      lensToggle: Boolean(state.registered?.lensToggle),
+      timerToggle: Boolean(state.registered?.timerToggle)
+    },
+    error: state.error ?? null
+  }
+}
+
+function formatShortcut(shortcut: string): string {
+  return shortcut
+    .replaceAll('CommandOrControl', 'Ctrl / Command')
+    .replaceAll('+', ' + ')
+}
+
+function keyToAcceleratorKey(event: KeyboardEvent): string | null {
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.replace('Key', '')
+  if (/^Digit[0-9]$/.test(event.code)) return event.code.replace('Digit', '')
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.code)) return event.code
+
+  const keyMap: Record<string, string> = {
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    Enter: 'Enter',
+    Escape: 'Escape',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown',
+    Space: 'Space',
+    Tab: 'Tab'
+  }
+
+  return keyMap[event.code] ?? null
+}
+
+function eventToShortcut(event: KeyboardEvent): string | null {
+  const key = keyToAcceleratorKey(event)
+
+  if (!key || ['Control', 'Meta', 'Shift', 'Alt'].includes(event.key)) {
+    return null
+  }
+
+  const parts: string[] = []
+  if (event.ctrlKey || event.metaKey) parts.push('CommandOrControl')
+  if (event.altKey) parts.push('Alt')
+  if (event.shiftKey) parts.push('Shift')
+
+  if (parts.length === 0) return null
+
+  parts.push(key)
+  return parts.join('+')
+}
+
 function getInitialMainTool(): MainTool {
   try {
     const savedTool = window.localStorage.getItem('maple.activeTool')
@@ -108,28 +199,44 @@ function getInitialMainTool(): MainTool {
 }
 
 function MainPanel(): React.ReactElement {
-  const [config, setConfig] = useState<LensConfig | null>(null)
+  const [lensState, setLensState] = useState<LensState>(defaultLensState)
   const [settings, setSettings] = useState<LensSettings>(defaultRendererSettings)
   const [timerState, setTimerState] = useState<TimerState>(defaultTimerState)
+  const [hotkeyState, setHotkeyState] = useState<HotkeyState>(defaultHotkeyState)
   const [activeTool, setActiveTool] = useState<MainTool>(getInitialMainTool)
   const [busy, setBusy] = useState(false)
   const timerSettingsRef = useRef(defaultTimerSettings)
 
   useEffect(() => {
-    window.maple.getLensConfig().then((nextConfig) => {
-      setConfig(nextConfig)
-      if (nextConfig) setSettings(nextConfig.settings)
+    window.maple.getLensState().then((nextState) => {
+      const normalizedState = normalizeLensState(nextState)
+      setLensState(normalizedState)
+      if (normalizedState.config) setSettings(normalizedState.config.settings)
     })
 
-    return window.maple.onSelectionUpdated((nextConfig) => {
-      setConfig(nextConfig)
-      if (nextConfig) setSettings(nextConfig.settings)
+    return window.maple.onLensUpdated((nextState) => {
+      const normalizedState = normalizeLensState(nextState)
+      setLensState(normalizedState)
+      if (normalizedState.config) setSettings(normalizedState.config.settings)
     })
   }, [])
 
   useEffect(() => {
     window.maple.getTimerState().then((state) => setTimerState(normalizeTimerState(state)))
     return window.maple.onTimerUpdated((state) => setTimerState(normalizeTimerState(state)))
+  }, [])
+
+  useEffect(() => {
+    window.maple.getHotkeyState().then((state) => setHotkeyState(normalizeHotkeyState(state)))
+    return window.maple.onHotkeysUpdated((state) => setHotkeyState(normalizeHotkeyState(state)))
+  }, [])
+
+  useEffect(() => {
+    return window.maple.onMainToolSelected((tool) => {
+      if (tool === 'lens' || tool === 'timer' || tool === 'hotkeys') {
+        setActiveTool(tool)
+      }
+    })
   }, [])
 
   useEffect(() => {
@@ -153,9 +260,9 @@ function MainPanel(): React.ReactElement {
   const updateSetting = (next: Partial<LensSettings>): void => {
     setSettings((current) => ({ ...current, ...next }))
     window.maple.updateLensSettings(next)
-    setConfig((current) => {
-      if (!current) return current
-      return { ...current, settings: { ...current.settings, ...next } }
+    setLensState((current) => {
+      if (!current.config) return current
+      return { ...current, config: { ...current.config, settings: { ...current.config.settings, ...next } } }
     })
   }
 
@@ -165,10 +272,13 @@ function MainPanel(): React.ReactElement {
     window.setTimeout(() => setBusy(false), 600)
   }
 
-  const closeLens = (): void => {
-    window.maple.closeLens()
-    setConfig(null)
+  const toggleLens = async (): Promise<void> => {
+    const nextState = normalizeLensState(await window.maple.toggleLens())
+    setLensState(nextState)
+    if (nextState.config) setSettings(nextState.config.settings)
   }
+
+  const config = lensState.config
 
   const updateTimerSetting = (next: Partial<TimerSettings>): void => {
     setTimerState((current) => ({
@@ -199,6 +309,16 @@ function MainPanel(): React.ReactElement {
   const stopTimer = async (): Promise<void> => {
     const nextState = await window.maple.stopTimer()
     setTimerState(normalizeTimerState(nextState))
+  }
+
+  const updateHotkey = async (action: HotkeyAction, shortcut: string): Promise<void> => {
+    const nextState = await window.maple.updateHotkey(action, shortcut)
+    setHotkeyState(normalizeHotkeyState(nextState))
+  }
+
+  const resetHotkey = async (action: HotkeyAction): Promise<void> => {
+    const nextState = await window.maple.resetHotkey(action)
+    setHotkeyState(normalizeHotkeyState(nextState))
   }
 
   return (
@@ -239,18 +359,6 @@ function MainPanel(): React.ReactElement {
             <Keyboard size={18} weight="bold" />
             <span>热键</span>
           </button>
-          <button className="tool-nav-item" type="button" disabled>
-            <MapTrifold size={18} />
-            <span>地图标记</span>
-          </button>
-          <button className="tool-nav-item" type="button" disabled>
-            <BellRinging size={18} />
-            <span>事件提醒</span>
-          </button>
-          <button className="tool-nav-item" type="button" disabled>
-            <SlidersHorizontal size={18} />
-            <span>全局设置</span>
-          </button>
         </nav>
 
       </aside>
@@ -267,14 +375,14 @@ function MainPanel(): React.ReactElement {
 
               <div className="header-actions">
                 {config && (
-                  <button className="secondary-button" type="button" onClick={closeLens}>
+                  <button className="secondary-button" type="button" onClick={toggleLens}>
                     <Eye size={17} />
-                    <span>关闭放大镜</span>
+                    <span>{lensState.isOpen ? '隐藏放大镜' : '展示放大镜'}</span>
                   </button>
                 )}
                 <button className="primary-button" type="button" onClick={startSelection} disabled={busy}>
                   <Selection size={18} weight="bold" />
-                  <span>{busy ? '选择中' : '选择区域'}</span>
+                  <span>{busy ? '选择中' : config ? '重新选择区域' : '选择区域'}</span>
                 </button>
               </div>
             </section>
@@ -346,7 +454,7 @@ function MainPanel(): React.ReactElement {
             stopTimer={stopTimer}
           />
         ) : (
-          <HotkeysPanel />
+          <HotkeysPanel hotkeyState={hotkeyState} updateHotkey={updateHotkey} resetHotkey={resetHotkey} />
         )}
       </section>
     </main>
@@ -526,14 +634,71 @@ function TimerPanel({
   )
 }
 
-function HotkeysPanel(): React.ReactElement {
+function HotkeysPanel({
+  hotkeyState,
+  updateHotkey,
+  resetHotkey
+}: {
+  hotkeyState: HotkeyState
+  updateHotkey: (action: HotkeyAction, shortcut: string) => Promise<void>
+  resetHotkey: (action: HotkeyAction) => Promise<void>
+}): React.ReactElement {
+  const [capturingAction, setCapturingAction] = useState<HotkeyAction | null>(null)
+  const [captureError, setCaptureError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!capturingAction) return
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (event.key === 'Escape') {
+        setCapturingAction(null)
+        setCaptureError(null)
+        return
+      }
+
+      const shortcut = eventToShortcut(event)
+
+      if (!shortcut) {
+        setCaptureError('请按下包含 Ctrl / Command、Alt 或 Shift 的组合键。')
+        return
+      }
+
+      setCaptureError(null)
+      setCapturingAction(null)
+      void updateHotkey(capturingAction, shortcut)
+    }
+
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [capturingAction, updateHotkey])
+
+  const rows: Array<{
+    action: HotkeyAction
+    title: string
+    description: string
+  }> = [
+    {
+      action: 'lensToggle',
+      title: '打开 / 关闭放大镜浮层',
+      description: '全局生效，关闭后再次按下会恢复上次选区和浮层位置。'
+    },
+    {
+      action: 'timerToggle',
+      title: '打开 / 关闭倒计时浮层',
+      description: '全局生效，重新打开时会使用上次放置的位置。'
+    }
+  ]
+
   return (
     <>
       <section className="tool-header">
         <div>
           <p className="section-kicker">热键</p>
           <h1>集中管理所有快捷操作</h1>
-          <p className="header-copy">这里展示 MapleTool 当前可用的快捷键，后续新增功能的热键也会放在这里。</p>
+          <p className="header-copy">点击录制后按下新的组合键，MapleTool 会立刻尝试注册并保存。</p>
         </div>
       </section>
 
@@ -544,24 +709,29 @@ function HotkeysPanel(): React.ReactElement {
         </div>
 
         <div className="hotkey-list">
-          <div className="hotkey-row">
-            <div className="hotkey-copy">
-              <strong>关闭放大镜浮层</strong>
-              <span>全局生效，游戏窗口获得焦点时也可以直接关闭。</span>
-            </div>
-            <span className="hotkey-scope">全局</span>
-            <kbd>{CLOSE_LENS_SHORTCUT_LABEL}</kbd>
-          </div>
+          {rows.map((row) => {
+            const isCapturing = capturingAction === row.action
+            const registered = hotkeyState.registered[row.action]
 
-          <div className="hotkey-row">
-            <div className="hotkey-copy">
-              <strong>关闭倒计时浮层</strong>
-              <span>全局生效，固定浮层后也可以直接关闭。</span>
-            </div>
-            <span className="hotkey-scope">全局</span>
-            <kbd>{CLOSE_TIMER_SHORTCUT_LABEL}</kbd>
-          </div>
+            return (
+              <div className="hotkey-row" key={row.action}>
+                <div className="hotkey-copy">
+                  <strong>{row.title}</strong>
+                  <span>{row.description}</span>
+                </div>
+                <span className={`hotkey-scope ${registered ? '' : 'is-error'}`}>{registered ? '已生效' : '未注册'}</span>
+                <button className={`hotkey-recorder ${isCapturing ? 'is-recording' : ''}`} type="button" onClick={() => setCapturingAction(row.action)}>
+                  {isCapturing ? '按下组合键' : formatShortcut(hotkeyState.settings[row.action])}
+                </button>
+                <button className="secondary-button compact-button" type="button" onClick={() => resetHotkey(row.action)}>
+                  <span>恢复默认</span>
+                </button>
+              </div>
+            )
+          })}
         </div>
+
+        {(captureError || hotkeyState.error) && <p className="hotkey-error">{captureError ?? hotkeyState.error}</p>}
       </section>
     </>
   )

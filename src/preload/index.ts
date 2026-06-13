@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { LensConfig, LensSettings, ScreenSource, SelectionPayload, TimerSettings, TimerState } from '../shared/types'
+import type {
+  HotkeyAction,
+  HotkeyState,
+  LensConfig,
+  LensSettings,
+  LensState,
+  ScreenSource,
+  SelectionPayload,
+  TimerSettings,
+  TimerState
+} from '../shared/types'
 
 const api = {
   startSelection: (): Promise<void> => ipcRenderer.invoke('selection:start'),
@@ -15,11 +25,17 @@ const api = {
   getLensConfig: (): Promise<LensConfig | null> => {
     return ipcRenderer.invoke('lens:get-config')
   },
+  getLensState: (): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:get-state')
+  },
   updateLensSettings: (settings: Partial<LensSettings>): void => {
     ipcRenderer.send('lens:update-settings', settings)
   },
   closeLens: (): void => {
     ipcRenderer.send('lens:close')
+  },
+  toggleLens: (): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:toggle')
   },
   getTimerState: (): Promise<TimerState> => {
     return ipcRenderer.invoke('timer:get-settings')
@@ -48,10 +64,27 @@ const api = {
   closeTimer: (): void => {
     ipcRenderer.send('timer:close')
   },
+  toggleTimer: (): Promise<TimerState> => {
+    return ipcRenderer.invoke('timer:toggle')
+  },
+  getHotkeyState: (): Promise<HotkeyState> => {
+    return ipcRenderer.invoke('hotkeys:get-state')
+  },
+  updateHotkey: (action: HotkeyAction, shortcut: string): Promise<HotkeyState> => {
+    return ipcRenderer.invoke('hotkeys:update', action, shortcut)
+  },
+  resetHotkey: (action: HotkeyAction): Promise<HotkeyState> => {
+    return ipcRenderer.invoke('hotkeys:reset', action)
+  },
   onSelectionUpdated: (callback: (config: LensConfig | null) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, config: LensConfig | null): void => callback(config)
     ipcRenderer.on('selection:updated', handler)
     return () => ipcRenderer.removeListener('selection:updated', handler)
+  },
+  onLensUpdated: (callback: (state: LensState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: LensState): void => callback(state)
+    ipcRenderer.on('lens:updated', handler)
+    return () => ipcRenderer.removeListener('lens:updated', handler)
   },
   onLensSettings: (callback: (settings: LensSettings) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, settings: LensSettings): void => callback(settings)
@@ -77,6 +110,16 @@ const api = {
     const handler = (): void => callback()
     ipcRenderer.on('timer:visual-alert', handler)
     return () => ipcRenderer.removeListener('timer:visual-alert', handler)
+  },
+  onHotkeysUpdated: (callback: (state: HotkeyState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: HotkeyState): void => callback(state)
+    ipcRenderer.on('hotkeys:updated', handler)
+    return () => ipcRenderer.removeListener('hotkeys:updated', handler)
+  },
+  onMainToolSelected: (callback: (tool: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, tool: string): void => callback(tool)
+    ipcRenderer.on('main:tool-selected', handler)
+    return () => ipcRenderer.removeListener('main:tool-selected', handler)
   }
 }
 

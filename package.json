@@ -1,6 +1,6 @@
 {
   "name": "maple_tool",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "面向 GMS 国际服冒险岛玩家的桌面小工具。",
   "main": "out/main/index.js",
   "author": "Astra-z",
@@ -10,7 +10,8 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
     "preview": "electron-vite preview",
-    "dist": "pnpm build && electron-builder"
+    "dist": "pnpm build && electron-builder",
+    "dist:win": "pnpm build && electron-builder --win --x64"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -43,14 +44,28 @@
     },
     "win": {
       "target": [
-        "nsis"
-      ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "nsis": {
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
     }
   }
 }

@@ -1,8 +1,20 @@
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, screen } from 'electron'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { CLOSE_LENS_SHORTCUT, CLOSE_TIMER_SHORTCUT, TIMER_FONT_OPTIONS } from '../shared/types'
-import type { DisplayInfo, LensConfig, LensSettings, Rect, SelectionPayload, TimerSettings, TimerState } from '../shared/types'
+import { DEFAULT_HOTKEY_SETTINGS, HOTKEY_ACTIONS, TIMER_FONT_OPTIONS } from '../shared/types'
+import type {
+  DisplayInfo,
+  HotkeyAction,
+  HotkeySettings,
+  HotkeyState,
+  LensConfig,
+  LensSettings,
+  LensState,
+  Rect,
+  SelectionPayload,
+  TimerSettings,
+  TimerState
+} from '../shared/types'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
 
@@ -22,6 +34,7 @@ type PersistedAppState = {
   timerSettings?: Partial<TimerSettings>
   timerOpen?: boolean
   timerWindowBounds?: Electron.Rectangle
+  hotkeySettings?: Partial<HotkeySettings>
 }
 
 let persistedState: PersistedAppState = {}
@@ -49,6 +62,11 @@ let lastTimerRemainingSeconds: number | null = null
 let timerRunning = false
 let timerReachedZero = false
 let timerAudioCache: { path: string; mtimeMs: number; dataUrl: string } | null = null
+let hotkeySettings: HotkeySettings = { ...DEFAULT_HOTKEY_SETTINGS }
+let registeredHotkeys: Record<HotkeyAction, boolean> = {
+  lensToggle: false,
+  timerToggle: false
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -80,6 +98,27 @@ function normalizeTimerSettings(settings?: Partial<TimerSettings>): TimerSetting
 
 function mergeTimerSettings(settings: Partial<TimerSettings>): TimerSettings {
   return normalizeTimerSettings({ ...timerSettings, ...settings })
+}
+
+function normalizeHotkeySettings(settings?: Partial<HotkeySettings>): HotkeySettings {
+  return HOTKEY_ACTIONS.reduce((nextSettings, action) => {
+    const shortcut = settings?.[action]
+    nextSettings[action] =
+      typeof shortcut === 'string' && shortcut.trim().length > 0 ? shortcut.trim() : DEFAULT_HOTKEY_SETTINGS[action]
+    return nextSettings
+  }, {} as HotkeySettings)
+}
+
+function getHotkeyState(error: string | null = null): HotkeyState {
+  return {
+    settings: hotkeySettings,
+    registered: registeredHotkeys,
+    error
+  }
+}
+
+function broadcastHotkeyState(error: string | null = null): void {
+  mainWindow?.webContents.send('hotkeys:updated', getHotkeyState(error))
 }
 
 function timerAudioMimeType(filePath: string): string {
@@ -176,6 +215,7 @@ function savePersistedState(): void {
         ? lensWindow.getBounds()
         : normalizeWindowBounds(persistedState.lensWindowBounds),
     timerSettings,
+    hotkeySettings,
     timerOpen: Boolean(timerWindow && !timerWindow.isDestroyed()),
     timerWindowBounds:
       timerWindow && !timerWindow.isDestroyed()
@@ -197,6 +237,7 @@ function restorePersistedState(): void {
   persistedState = readPersistedState()
   currentLensSettings = normalizeLensSettings(persistedState.currentLensSettings)
   timerSettings = normalizeTimerSettings(persistedState.timerSettings)
+  hotkeySettings = normalizeHotkeySettings(persistedState.hotkeySettings)
   resetTimerDeadline()
 
   if (persistedState.lensConfig) {
@@ -216,6 +257,19 @@ function resetTimerDeadline(): void {
   timerDeadlineMs = Date.now() + timerSettings.intervalSeconds * 1000
   lastTimerRemainingSeconds = null
   timerReachedZero = false
+}
+
+function getLensState(): LensState {
+  return {
+    config: lensConfig,
+    isOpen: Boolean(lensWindow && !lensWindow.isDestroyed())
+  }
+}
+
+function broadcastLensState(): void {
+  const lensState = getLensState()
+  mainWindow?.webContents.send('lens:updated', lensState)
+  mainWindow?.webContents.send('selection:updated', lensState.config)
 }
 
 function getTimerState(): TimerState {
@@ -268,9 +322,16 @@ function ensureTimerTicker(): void {
   emitTimerTick()
 }
 
+function stopTimerTicker(): void {
+  if (!timerTickId) return
+  clearInterval(timerTickId)
+  timerTickId = null
+}
+
 function startTimer(): TimerState {
   timerRunning = true
   resetTimerDeadline()
+  ensureTimerTicker()
   broadcastTimerState()
   return getTimerState()
 }
@@ -278,6 +339,7 @@ function startTimer(): TimerState {
 function stopTimer(): TimerState {
   timerRunning = false
   resetTimerDeadline()
+  stopTimerTicker()
   broadcastTimerState()
   return getTimerState()
 }
@@ -359,45 +421,215 @@ function createMainWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
-    if (!isQuitting) savePersistedState()
+    if (!isQuitting) {
+      savePersistedState()
+      app.quit()
+    }
   })
 }
 
-function closeLens(): void {
-  lensConfig = null
-
+function hideLens(): LensState {
   if (lensWindow && !lensWindow.isDestroyed()) {
-    lensWindow.close()
-  } else {
-    savePersistedState()
+    persistedState.lensWindowBounds = lensWindow.getBounds()
+    const windowToClose = lensWindow
+    lensWindow = null
+    windowToClose.destroy()
   }
 
-  mainWindow?.webContents.send('selection:updated', null)
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
 }
 
-function closeTimer(): void {
+function showLens(): LensState {
+  if (lensConfig) {
+    createLensWindow(lensConfig, persistedState.lensWindowBounds)
+  }
+
+  broadcastLensState()
+  return getLensState()
+}
+
+function toggleLens(): LensState {
+  if (lensWindow && !lensWindow.isDestroyed()) {
+    return hideLens()
+  }
+
+  return showLens()
+}
+
+function closeLens(): void {
+  hideLens()
+}
+
+function hideTimer(): TimerState {
   if (timerWindow && !timerWindow.isDestroyed()) {
-    timerWindow.close()
-    return
+    persistedState.timerWindowBounds = timerWindow.getBounds()
+    const windowToClose = timerWindow
+    timerWindow = null
+    windowToClose.destroy()
   }
 
   broadcastTimerState()
   savePersistedState()
+  return getTimerState()
 }
 
-function registerGlobalShortcuts(): void {
-  const shortcuts = [
-    { shortcut: CLOSE_LENS_SHORTCUT, action: closeLens },
-    { shortcut: CLOSE_TIMER_SHORTCUT, action: closeTimer }
-  ]
+function toggleTimer(): TimerState {
+  if (timerWindow && !timerWindow.isDestroyed()) {
+    return hideTimer()
+  }
 
-  for (const item of shortcuts) {
-    const registered = globalShortcut.register(item.shortcut, item.action)
+  createTimerWindow(persistedState.timerWindowBounds)
+  return getTimerState()
+}
 
-    if (!registered) {
-      console.warn(`Failed to register global shortcut: ${item.shortcut}`)
+function closeTimer(): void {
+  hideTimer()
+}
+
+function showMainTool(tool: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow()
+  }
+
+  mainWindow?.show()
+  mainWindow?.focus()
+  mainWindow?.webContents.send('main:tool-selected', tool)
+}
+
+function showAboutDialog(): void {
+  const options = {
+    type: 'info',
+    title: '关于 MapleTool',
+    message: `MapleTool ${app.getVersion()}`,
+    detail: '面向 GMS 国际服冒险岛玩家的小工具。当前包含冷却放大镜、刷图倒计时和可配置热键。'
+  } satisfies Electron.MessageBoxOptions
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    void dialog.showMessageBox(mainWindow, options)
+    return
+  }
+
+  void dialog.showMessageBox(options)
+}
+
+function refreshApplicationMenu(): void {
+  const menu = Menu.buildFromTemplate([
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: '选择放大镜区域',
+          click: createSelectorWindows
+        },
+        {
+          label: '打开 / 关闭放大镜',
+          accelerator: hotkeySettings.lensToggle,
+          click: toggleLens
+        },
+        {
+          label: '打开 / 关闭倒计时浮层',
+          accelerator: hotkeySettings.timerToggle,
+          click: toggleTimer
+        },
+        { type: 'separator' },
+        {
+          label: '退出 MapleTool',
+          role: 'quit'
+        }
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: '热键设置',
+          click: () => showMainTool('hotkeys')
+        },
+        {
+          label: '关于 MapleTool',
+          click: showAboutDialog
+        }
+      ]
+    }
+  ])
+
+  Menu.setApplicationMenu(menu)
+}
+
+function registerGlobalShortcuts(shouldBroadcast = true): void {
+  globalShortcut.unregisterAll()
+  registeredHotkeys = {
+    lensToggle: false,
+    timerToggle: false
+  }
+
+  const shortcutHandlers: Record<HotkeyAction, () => void> = {
+    lensToggle: toggleLens,
+    timerToggle: toggleTimer
+  }
+  const registeredShortcuts = new Set<string>()
+
+  for (const action of HOTKEY_ACTIONS) {
+    const shortcut = hotkeySettings[action]
+
+    if (registeredShortcuts.has(shortcut)) {
+      console.warn(`Duplicate global shortcut: ${shortcut}`)
+      continue
+    }
+
+    registeredHotkeys[action] = globalShortcut.register(shortcut, shortcutHandlers[action])
+
+    if (registeredHotkeys[action]) {
+      registeredShortcuts.add(shortcut)
+    } else {
+      console.warn(`Failed to register global shortcut: ${shortcut}`)
     }
   }
+
+  refreshApplicationMenu()
+  if (shouldBroadcast) broadcastHotkeyState()
+}
+
+function hasDuplicateHotkey(settings: HotkeySettings): boolean {
+  return new Set(HOTKEY_ACTIONS.map((action) => settings[action])).size !== HOTKEY_ACTIONS.length
+}
+
+function updateHotkey(action: HotkeyAction, shortcut: string): HotkeyState {
+  if (!HOTKEY_ACTIONS.includes(action)) {
+    return getHotkeyState('未知的热键配置。')
+  }
+
+  const nextSettings = normalizeHotkeySettings({
+    ...hotkeySettings,
+    [action]: shortcut
+  })
+
+  if (hasDuplicateHotkey(nextSettings)) {
+    return getHotkeyState('这个快捷键已经被其他功能使用。')
+  }
+
+  const previousSettings = hotkeySettings
+  hotkeySettings = nextSettings
+  registerGlobalShortcuts(false)
+
+  if (!registeredHotkeys[action]) {
+    const failedShortcut = hotkeySettings[action]
+    hotkeySettings = previousSettings
+    registerGlobalShortcuts(false)
+    const state = getHotkeyState(`快捷键 ${failedShortcut} 无法注册，可能已被系统或其他软件占用。`)
+    broadcastHotkeyState(state.error)
+    return state
+  }
+
+  savePersistedState()
+  broadcastHotkeyState()
+  return getHotkeyState()
+}
+
+function resetHotkey(action: HotkeyAction): HotkeyState {
+  return updateHotkey(action, DEFAULT_HOTKEY_SETTINGS[action])
 }
 
 function closeSelectorWindows(): void {
@@ -494,15 +726,22 @@ function createLensWindow(config: LensConfig, restoredBounds?: Electron.Rectangl
   applyLensWindowBehavior(lensWindow, config.settings)
   loadRenderer(lensWindow, 'lens')
 
-  lensWindow.on('close', () => {
-    if (lensWindow && !lensWindow.isDestroyed()) {
-      persistedState.lensWindowBounds = lensWindow.getBounds()
+  const createdWindow = lensWindow
+
+  createdWindow.on('close', () => {
+    if (!createdWindow.isDestroyed()) {
+      persistedState.lensWindowBounds = createdWindow.getBounds()
     }
   })
 
-  lensWindow.on('closed', () => {
-    lensWindow = null
-    if (!isQuitting) savePersistedState()
+  createdWindow.on('closed', () => {
+    if (lensWindow === createdWindow) {
+      lensWindow = null
+    }
+    if (!isQuitting) {
+      broadcastLensState()
+      savePersistedState()
+    }
   })
 
   savePersistedState()
@@ -567,14 +806,18 @@ function createTimerWindow(restoredBounds?: Electron.Rectangle): void {
   timerWindow.showInactive()
   timerWindow.moveTop()
 
-  timerWindow.on('close', () => {
-    if (timerWindow && !timerWindow.isDestroyed()) {
-      persistedState.timerWindowBounds = timerWindow.getBounds()
+  const createdWindow = timerWindow
+
+  createdWindow.on('close', () => {
+    if (!createdWindow.isDestroyed()) {
+      persistedState.timerWindowBounds = createdWindow.getBounds()
     }
   })
 
-  timerWindow.on('closed', () => {
-    timerWindow = null
+  createdWindow.on('closed', () => {
+    if (timerWindow === createdWindow) {
+      timerWindow = null
+    }
     if (!isQuitting) {
       broadcastTimerState()
       savePersistedState()
@@ -631,7 +874,7 @@ ipcMain.on('selection:complete', (_event, payload: SelectionPayload) => {
 
   closeSelectorWindows()
   createLensWindow(lensConfig)
-  mainWindow?.webContents.send('selection:updated', lensConfig)
+  broadcastLensState()
   savePersistedState()
 })
 
@@ -645,6 +888,10 @@ ipcMain.handle('screen:get-source', (_event, displayId: string) => {
 
 ipcMain.handle('lens:get-config', () => {
   return lensConfig
+})
+
+ipcMain.handle('lens:get-state', () => {
+  return getLensState()
 })
 
 ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>) => {
@@ -679,12 +926,16 @@ ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>) => 
   }
 
   lensWindow?.webContents.send('lens:settings', lensConfig.settings)
-  mainWindow?.webContents.send('selection:updated', lensConfig)
+  broadcastLensState()
   savePersistedState()
 })
 
 ipcMain.on('lens:close', () => {
   closeLens()
+})
+
+ipcMain.handle('lens:toggle', () => {
+  return toggleLens()
 })
 
 ipcMain.handle('timer:get-settings', () => {
@@ -748,6 +999,7 @@ ipcMain.on('timer:update-settings', (_event, settings: Partial<TimerSettings>) =
   if (settings.intervalSeconds !== undefined && timerSettings.intervalSeconds !== previousInterval) {
     timerRunning = false
     resetTimerDeadline()
+    stopTimerTicker()
   }
 
   if (timerWindow && !timerWindow.isDestroyed()) {
@@ -778,9 +1030,25 @@ ipcMain.on('timer:close', () => {
   closeTimer()
 })
 
+ipcMain.handle('timer:toggle', () => {
+  return toggleTimer()
+})
+
+ipcMain.handle('hotkeys:get-state', () => {
+  return getHotkeyState()
+})
+
+ipcMain.handle('hotkeys:update', (_event, action: HotkeyAction, shortcut: string) => {
+  return updateHotkey(action, shortcut)
+})
+
+ipcMain.handle('hotkeys:reset', (_event, action: HotkeyAction) => {
+  return resetHotkey(action)
+})
+
 app.whenReady().then(() => {
   restorePersistedState()
-  ensureTimerTicker()
+  refreshApplicationMenu()
   createMainWindow()
   registerGlobalShortcuts()
 
@@ -805,10 +1073,7 @@ app.on('before-quit', () => {
 })
 
 app.on('will-quit', () => {
-  if (timerTickId) {
-    clearInterval(timerTickId)
-    timerTickId = null
-  }
+  stopTimerTicker()
   globalShortcut.unregisterAll()
 })
 
