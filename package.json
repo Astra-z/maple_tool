@@ -1,6 +1,6 @@
 {
   "name": "maple_tool",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "面向 GMS 国际服冒险岛玩家的桌面小工具。",
   "main": "out/main/index.js",
   "author": "Astra-z",

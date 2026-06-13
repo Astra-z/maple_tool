@@ -123,8 +123,17 @@ export type TimerSettings = {
   locked: boolean
 }
 
+export type TimerProfile = {
+  id: string
+  name: string
+  settings: TimerSettings
+  windowBounds?: Rect
+}
+
 export type TimerState = {
   settings: TimerSettings
+  profiles: TimerProfile[]
+  activeProfileId: string
   isOpen: boolean
   isRunning: boolean
   remainingSeconds: number

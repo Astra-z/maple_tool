@@ -21,6 +21,7 @@ import type {
   Rect,
   SelectionPayload,
   TimerSettings,
+  TimerProfile,
   TimerState,
   UpdateCheckResult
 } from '../shared/types'
@@ -48,6 +49,8 @@ type PersistedAppState = {
   lensConfig?: LensConfig | null
   lensOpen?: boolean
   lensWindowBounds?: Electron.Rectangle
+  timerProfiles?: TimerProfile[]
+  activeTimerProfileId?: string
   timerSettings?: Partial<TimerSettings>
   timerOpen?: boolean
   timerWindowBounds?: Electron.Rectangle
@@ -77,6 +80,8 @@ const defaultTimerSettings: TimerSettings = {
 }
 
 let timerSettings: TimerSettings = { ...defaultTimerSettings }
+let timerProfiles: TimerProfile[] = []
+let activeTimerProfileId = 'default'
 let timerDeadlineMs = Date.now() + timerSettings.intervalSeconds * 1000
 let timerTickId: ReturnType<typeof setInterval> | null = null
 let lastTimerRemainingSeconds: number | null = null
@@ -305,6 +310,90 @@ function normalizeTimerSettings(settings?: Partial<TimerSettings>): TimerSetting
 
 function mergeTimerSettings(settings: Partial<TimerSettings>): TimerSettings {
   return normalizeTimerSettings({ ...timerSettings, ...settings })
+}
+
+function createDefaultTimerProfile(settings: TimerSettings = defaultTimerSettings): TimerProfile {
+  return {
+    id: 'default',
+    name: '默认配置',
+    settings: normalizeTimerSettings(settings)
+  }
+}
+
+function normalizeTimerProfile(profile: Partial<TimerProfile> | null | undefined, index: number): TimerProfile | null {
+  if (!profile) return null
+
+  const settings = normalizeTimerSettings(profile.settings)
+
+  return {
+    id: typeof profile.id === 'string' && profile.id.trim() ? profile.id : createId('timer-profile'),
+    name:
+      typeof profile.name === 'string' && profile.name.trim()
+        ? profile.name.trim()
+        : index === 0
+          ? '默认配置'
+          : `配置 ${index + 1}`,
+    settings,
+    windowBounds: normalizeRect(profile.windowBounds, 80, 60) ?? undefined
+  }
+}
+
+function normalizeTimerProfiles(profiles?: TimerProfile[]): TimerProfile[] {
+  if (!Array.isArray(profiles)) return []
+
+  return profiles
+    .map((profile, index) => normalizeTimerProfile(profile, index))
+    .filter((profile): profile is TimerProfile => Boolean(profile))
+}
+
+function getActiveTimerProfile(): TimerProfile | null {
+  return timerProfiles.find((profile) => profile.id === activeTimerProfileId) ?? timerProfiles[0] ?? null
+}
+
+function ensureTimerProfiles(): void {
+  if (timerProfiles.length === 0) {
+    timerProfiles = [createDefaultTimerProfile(timerSettings)]
+  }
+
+  if (!timerProfiles.some((profile) => profile.id === activeTimerProfileId)) {
+    activeTimerProfileId = timerProfiles[0].id
+  }
+
+  const activeProfile = getActiveTimerProfile()
+  if (activeProfile) {
+    timerSettings = normalizeTimerSettings(activeProfile.settings)
+  }
+}
+
+function updateTimerProfile(profileId: string, updater: (profile: TimerProfile) => TimerProfile): TimerProfile | null {
+  let updatedProfile: TimerProfile | null = null
+
+  timerProfiles = timerProfiles.map((profile) => {
+    if (profile.id !== profileId) return profile
+    updatedProfile = updater(profile)
+    return updatedProfile
+  })
+
+  return updatedProfile
+}
+
+function syncActiveTimerProfile(bounds?: Partial<Rect>): void {
+  if (timerProfiles.length === 0) {
+    timerProfiles = [createDefaultTimerProfile(timerSettings)]
+  }
+
+  const activeProfile = getActiveTimerProfile()
+  if (!activeProfile) return
+
+  const normalizedBounds =
+    normalizeRect(bounds, 80, 60) ??
+    (timerWindow && !timerWindow.isDestroyed() ? normalizeRect(timerWindow.getBounds(), 80, 60) : null)
+
+  updateTimerProfile(activeProfile.id, (profile) => ({
+    ...profile,
+    settings: timerSettings,
+    windowBounds: normalizedBounds ?? profile.windowBounds
+  }))
 }
 
 function normalizeHotkeySettings(settings?: Partial<HotkeySettings>): HotkeySettings {
@@ -562,6 +651,8 @@ function savePersistedState(): void {
 
   syncOpenLensWindowBounds()
   ensureLensProfiles()
+  syncActiveTimerProfile()
+  const activeTimerProfile = getActiveTimerProfile()
 
   const nextState: PersistedAppState = {
     mainWindowBounds:
@@ -574,13 +665,15 @@ function savePersistedState(): void {
     activeLensCaptureId,
     lensProfileShortcutPrefix,
     lensOpen: lensVisible,
+    timerProfiles,
+    activeTimerProfileId,
     timerSettings,
     hotkeySettings,
     timerOpen: Boolean(timerWindow && !timerWindow.isDestroyed()),
     timerWindowBounds:
       timerWindow && !timerWindow.isDestroyed()
         ? timerWindow.getBounds()
-        : normalizeWindowBounds(persistedState.timerWindowBounds)
+        : normalizeWindowBounds(activeTimerProfile?.windowBounds ?? persistedState.timerWindowBounds)
   }
 
   try {
@@ -626,7 +719,20 @@ function restorePersistedState(): void {
   lensVisible = Boolean(persistedState.lensOpen)
   lensProfileShortcutPrefix = normalizeLensProfileShortcutPrefix(persistedState.lensProfileShortcutPrefix)
   ensureLensProfiles()
-  timerSettings = normalizeTimerSettings(persistedState.timerSettings)
+  const legacyTimerSettings = normalizeTimerSettings(persistedState.timerSettings)
+  timerProfiles = normalizeTimerProfiles(persistedState.timerProfiles)
+
+  if (timerProfiles.length === 0) {
+    timerProfiles = [
+      {
+        ...createDefaultTimerProfile(legacyTimerSettings),
+        windowBounds: normalizeRect(persistedState.timerWindowBounds, 80, 60) ?? undefined
+      }
+    ]
+  }
+
+  activeTimerProfileId = persistedState.activeTimerProfileId ?? timerProfiles[0].id
+  ensureTimerProfiles()
   hotkeySettings = normalizeHotkeySettings(persistedState.hotkeySettings)
   resetTimerDeadline()
 }
@@ -673,8 +779,12 @@ function broadcastLensState(): void {
 }
 
 function getTimerState(): TimerState {
+  ensureTimerProfiles()
+
   return {
     settings: timerSettings,
+    profiles: timerProfiles,
+    activeProfileId: activeTimerProfileId,
     isOpen: Boolean(timerWindow && !timerWindow.isDestroyed()),
     isRunning: timerRunning,
     remainingSeconds: getTimerRemainingSeconds()
@@ -1006,7 +1116,7 @@ function selectLensProfile(profileId: string): LensState {
 
 function hideTimer(): TimerState {
   if (timerWindow && !timerWindow.isDestroyed()) {
-    persistedState.timerWindowBounds = timerWindow.getBounds()
+    syncActiveTimerProfile(timerWindow.getBounds())
     const windowToClose = timerWindow
     timerWindow = null
     windowToClose.destroy()
@@ -1022,12 +1132,121 @@ function toggleTimer(): TimerState {
     return hideTimer()
   }
 
-  createTimerWindow(persistedState.timerWindowBounds)
+  createTimerWindow(getActiveTimerProfile()?.windowBounds)
   return getTimerState()
 }
 
 function closeTimer(): void {
   hideTimer()
+}
+
+function createTimerProfile(name: string): TimerState {
+  syncActiveTimerProfile()
+
+  const profileName = typeof name === 'string' && name.trim() ? name.trim() : `配置 ${timerProfiles.length + 1}`
+  const profile: TimerProfile = {
+    id: createId('timer-profile'),
+    name: profileName,
+    settings: normalizeTimerSettings(timerSettings)
+  }
+
+  const wasTimerOpen = Boolean(timerWindow && !timerWindow.isDestroyed())
+  if (wasTimerOpen) {
+    hideTimer()
+  }
+
+  timerProfiles = [...timerProfiles, profile]
+  activeTimerProfileId = profile.id
+  timerSettings = normalizeTimerSettings(profile.settings)
+  timerRunning = false
+  resetTimerDeadline()
+  stopTimerTicker()
+
+  if (wasTimerOpen) {
+    createTimerWindow(profile.windowBounds)
+  }
+
+  broadcastTimerState()
+  savePersistedState()
+  return getTimerState()
+}
+
+function renameTimerProfile(profileId: string, name: string): TimerState {
+  const nextName = typeof name === 'string' && name.trim() ? name.trim() : ''
+  if (!nextName) return getTimerState()
+
+  updateTimerProfile(profileId, (profile) => ({
+    ...profile,
+    name: nextName
+  }))
+
+  broadcastTimerState()
+  savePersistedState()
+  return getTimerState()
+}
+
+function selectTimerProfile(profileId: string): TimerState {
+  if (!timerProfiles.some((profile) => profile.id === profileId)) {
+    return getTimerState()
+  }
+
+  const wasTimerOpen = Boolean(timerWindow && !timerWindow.isDestroyed())
+  if (wasTimerOpen) {
+    hideTimer()
+  } else {
+    syncActiveTimerProfile()
+  }
+
+  activeTimerProfileId = profileId
+  timerSettings = normalizeTimerSettings(getActiveTimerProfile()?.settings)
+  timerRunning = false
+  resetTimerDeadline()
+  stopTimerTicker()
+  timerAudioCache = null
+
+  if (wasTimerOpen) {
+    createTimerWindow(getActiveTimerProfile()?.windowBounds)
+  }
+
+  timerWindow?.webContents.send('timer:settings', timerSettings)
+  broadcastTimerState()
+  savePersistedState()
+  return getTimerState()
+}
+
+function deleteTimerProfile(profileId: string): TimerState {
+  if (timerProfiles.length <= 1) return getTimerState()
+
+  const deleteIndex = timerProfiles.findIndex((profile) => profile.id === profileId)
+  if (deleteIndex < 0) return getTimerState()
+
+  const wasActive = activeTimerProfileId === profileId
+  const wasTimerOpen = Boolean(timerWindow && !timerWindow.isDestroyed())
+
+  if (wasActive && wasTimerOpen) {
+    hideTimer()
+  } else {
+    syncActiveTimerProfile()
+  }
+
+  timerProfiles = timerProfiles.filter((profile) => profile.id !== profileId)
+
+  if (wasActive) {
+    activeTimerProfileId = timerProfiles[Math.max(0, deleteIndex - 1)]?.id ?? timerProfiles[0].id
+    timerSettings = normalizeTimerSettings(getActiveTimerProfile()?.settings)
+    timerRunning = false
+    resetTimerDeadline()
+    stopTimerTicker()
+    timerAudioCache = null
+
+    if (wasTimerOpen) {
+      createTimerWindow(getActiveTimerProfile()?.windowBounds)
+    }
+  }
+
+  broadcastTimerState()
+  savePersistedState()
+  return getTimerState()
 }
 
 function showMainTool(tool: string): void {
@@ -1376,7 +1595,9 @@ function createLensWindow(config: LensCapture): void {
   savePersistedState()
 }
 
-function createTimerWindow(restoredBounds?: Electron.Rectangle): void {
+function createTimerWindow(restoredBounds?: Partial<Rect>): void {
+  ensureTimerProfiles()
+
   if (timerWindow && !timerWindow.isDestroyed()) {
     applyTimerWindowBehavior(timerWindow, timerSettings)
     timerWindow.showInactive()
@@ -1390,8 +1611,9 @@ function createTimerWindow(restoredBounds?: Electron.Rectangle): void {
   const bounds = primaryDisplay.bounds
   const width = 260
   const height = 136
+  const activeProfile = getActiveTimerProfile()
   const windowBounds =
-    normalizeWindowBounds(restoredBounds) ?? {
+    normalizeWindowBounds(restoredBounds ?? activeProfile?.windowBounds) ?? {
       x: Math.round(bounds.x + bounds.width - width - 48),
       y: Math.round(bounds.y + 96),
       width,
@@ -1439,7 +1661,7 @@ function createTimerWindow(restoredBounds?: Electron.Rectangle): void {
 
   createdWindow.on('close', () => {
     if (!createdWindow.isDestroyed()) {
-      persistedState.timerWindowBounds = createdWindow.getBounds()
+      syncActiveTimerProfile(createdWindow.getBounds())
     }
   })
 
@@ -1695,6 +1917,22 @@ ipcMain.handle('timer:get-settings', () => {
   return getTimerState()
 })
 
+ipcMain.handle('timer:create-profile', (_event, name: string) => {
+  return createTimerProfile(name)
+})
+
+ipcMain.handle('timer:rename-profile', (_event, profileId: string, name: string) => {
+  return renameTimerProfile(profileId, name)
+})
+
+ipcMain.handle('timer:select-profile', (_event, profileId: string) => {
+  return selectTimerProfile(profileId)
+})
+
+ipcMain.handle('timer:delete-profile', (_event, profileId: string) => {
+  return deleteTimerProfile(profileId)
+})
+
 ipcMain.handle('timer:choose-audio', async () => {
   const dialogOptions = {
     title: '选择倒计时提示音',
@@ -1725,6 +1963,7 @@ ipcMain.handle('timer:choose-audio', async () => {
     audioName: basename(audioPath)
   })
   timerAudioCache = null
+  syncActiveTimerProfile()
 
   timerWindow?.webContents.send('timer:settings', timerSettings)
   broadcastTimerState()
@@ -1738,6 +1977,7 @@ ipcMain.handle('timer:reset-audio', () => {
     audioName: null
   })
   timerAudioCache = null
+  syncActiveTimerProfile()
 
   timerWindow?.webContents.send('timer:settings', timerSettings)
   broadcastTimerState()
@@ -1758,6 +1998,7 @@ ipcMain.on('timer:update-settings', (_event, settings: Partial<TimerSettings>) =
   if (timerWindow && !timerWindow.isDestroyed()) {
     applyTimerWindowBehavior(timerWindow, timerSettings)
   }
+  syncActiveTimerProfile()
   timerWindow?.webContents.send('timer:settings', timerSettings)
   broadcastTimerState()
   savePersistedState()
@@ -1776,7 +2017,7 @@ ipcMain.handle('timer:get-audio-data-url', () => {
 })
 
 ipcMain.on('timer:open', () => {
-  createTimerWindow(persistedState.timerWindowBounds)
+  createTimerWindow(getActiveTimerProfile()?.windowBounds)
 })
 
 ipcMain.on('timer:close', () => {
@@ -1827,7 +2068,7 @@ app.whenReady().then(() => {
   }
 
   if (persistedState.timerOpen) {
-    createTimerWindow(persistedState.timerWindowBounds)
+    createTimerWindow(getActiveTimerProfile()?.windowBounds)
   }
 
   app.on('activate', () => {

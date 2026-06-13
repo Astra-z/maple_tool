@@ -63,6 +63,18 @@ const api = {
   getTimerState: (): Promise<TimerState> => {
     return ipcRenderer.invoke('timer:get-settings')
   },
+  createTimerProfile: (name: string): Promise<TimerState> => {
+    return ipcRenderer.invoke('timer:create-profile', name)
+  },
+  renameTimerProfile: (profileId: string, name: string): Promise<TimerState> => {
+    return ipcRenderer.invoke('timer:rename-profile', profileId, name)
+  },
+  selectTimerProfile: (profileId: string): Promise<TimerState> => {
+    return ipcRenderer.invoke('timer:select-profile', profileId)
+  },
+  deleteTimerProfile: (profileId: string): Promise<TimerState> => {
+    return ipcRenderer.invoke('timer:delete-profile', profileId)
+  },
   chooseTimerAudio: (): Promise<TimerState> => {
     return ipcRenderer.invoke('timer:choose-audio')
   },

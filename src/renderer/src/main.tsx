@@ -62,6 +62,14 @@ const defaultTimerSettings: TimerSettings = {
 
 const defaultTimerState: TimerState = {
   settings: defaultTimerSettings,
+  profiles: [
+    {
+      id: 'default',
+      name: '默认配置',
+      settings: defaultTimerSettings
+    }
+  ],
+  activeProfileId: 'default',
   isOpen: false,
   isRunning: false,
   remainingSeconds: defaultTimerSettings.intervalSeconds
@@ -141,11 +149,20 @@ function formatSeconds(totalSeconds: number): string {
 
 function normalizeTimerState(state: TimerState): TimerState {
   const fallbackRemaining = state.settings?.intervalSeconds ?? defaultTimerSettings.intervalSeconds
+  const profiles = Array.isArray(state.profiles) && state.profiles.length > 0 ? state.profiles : defaultTimerState.profiles
+  const activeProfileId = profiles.some((profile) => profile.id === state.activeProfileId)
+    ? state.activeProfileId
+    : profiles[0].id
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0]
+
   return {
     settings: {
       ...defaultTimerSettings,
+      ...activeProfile.settings,
       ...state.settings
     },
+    profiles,
+    activeProfileId,
     isOpen: Boolean(state.isOpen),
     isRunning: Boolean(state.isRunning),
     remainingSeconds: Number.isFinite(state.remainingSeconds) ? state.remainingSeconds : fallbackRemaining
@@ -299,6 +316,8 @@ function MainPanel(): React.ReactElement {
   const [profileNameDraft, setProfileNameDraft] = useState('')
   const [editingCaptureId, setEditingCaptureId] = useState<string | null>(null)
   const [captureNameDraft, setCaptureNameDraft] = useState('')
+  const [editingTimerProfileId, setEditingTimerProfileId] = useState<string | null>(null)
+  const [timerProfileNameDraft, setTimerProfileNameDraft] = useState('')
   const timerSettingsRef = useRef(defaultTimerSettings)
 
   const applyLensState = (nextState: LensState): void => {
@@ -492,6 +511,53 @@ function MainPanel(): React.ReactElement {
   const stopTimer = async (): Promise<void> => {
     const nextState = await window.maple.stopTimer()
     setTimerState(normalizeTimerState(nextState))
+  }
+
+  const createTimerProfile = async (): Promise<void> => {
+    const nextState = await window.maple.createTimerProfile(`配置 ${timerState.profiles.length + 1}`)
+    setTimerState(normalizeTimerState(nextState))
+  }
+
+  const selectTimerProfile = async (profileId: string): Promise<void> => {
+    const nextState = await window.maple.selectTimerProfile(profileId)
+    setTimerState(normalizeTimerState(nextState))
+    setEditingTimerProfileId(null)
+    setTimerProfileNameDraft('')
+  }
+
+  const beginTimerProfileEdit = (): void => {
+    const activeProfile = timerState.profiles.find((profile) => profile.id === timerState.activeProfileId)
+    if (!activeProfile) return
+
+    setEditingTimerProfileId(activeProfile.id)
+    setTimerProfileNameDraft(activeProfile.name)
+  }
+
+  const saveTimerProfileEdit = async (): Promise<void> => {
+    if (!editingTimerProfileId) return
+    const name = timerProfileNameDraft.trim()
+    if (!name) return
+
+    const nextState = await window.maple.renameTimerProfile(editingTimerProfileId, name)
+    setTimerState(normalizeTimerState(nextState))
+    setEditingTimerProfileId(null)
+    setTimerProfileNameDraft('')
+  }
+
+  const cancelTimerProfileEdit = (): void => {
+    setEditingTimerProfileId(null)
+    setTimerProfileNameDraft('')
+  }
+
+  const deleteTimerProfile = async (): Promise<void> => {
+    if (timerState.profiles.length <= 1) return
+    const activeProfile = timerState.profiles.find((profile) => profile.id === timerState.activeProfileId)
+    if (!activeProfile || !window.confirm(`删除倒计时配置「${activeProfile.name}」？`)) return
+
+    const nextState = await window.maple.deleteTimerProfile(activeProfile.id)
+    setTimerState(normalizeTimerState(nextState))
+    setEditingTimerProfileId(null)
+    setTimerProfileNameDraft('')
   }
 
   const updateHotkey = async (action: HotkeyAction, shortcut: string): Promise<void> => {
@@ -781,6 +847,15 @@ function MainPanel(): React.ReactElement {
             resetAudio={resetAudio}
             startTimer={startTimer}
             stopTimer={stopTimer}
+            createTimerProfile={createTimerProfile}
+            selectTimerProfile={selectTimerProfile}
+            beginTimerProfileEdit={beginTimerProfileEdit}
+            saveTimerProfileEdit={saveTimerProfileEdit}
+            cancelTimerProfileEdit={cancelTimerProfileEdit}
+            deleteTimerProfile={deleteTimerProfile}
+            editingTimerProfileId={editingTimerProfileId}
+            timerProfileNameDraft={timerProfileNameDraft}
+            setTimerProfileNameDraft={setTimerProfileNameDraft}
           />
         ) : activeTool === 'hotkeys' ? (
           <HotkeysPanel
@@ -901,7 +976,16 @@ function TimerPanel({
   chooseAudio,
   resetAudio,
   startTimer,
-  stopTimer
+  stopTimer,
+  createTimerProfile,
+  selectTimerProfile,
+  beginTimerProfileEdit,
+  saveTimerProfileEdit,
+  cancelTimerProfileEdit,
+  deleteTimerProfile,
+  editingTimerProfileId,
+  timerProfileNameDraft,
+  setTimerProfileNameDraft
 }: {
   timerState: TimerState
   updateTimerSetting: (settings: Partial<TimerSettings>) => void
@@ -909,8 +993,18 @@ function TimerPanel({
   resetAudio: () => Promise<void>
   startTimer: () => Promise<void>
   stopTimer: () => Promise<void>
+  createTimerProfile: () => Promise<void>
+  selectTimerProfile: (profileId: string) => Promise<void>
+  beginTimerProfileEdit: () => void
+  saveTimerProfileEdit: () => Promise<void>
+  cancelTimerProfileEdit: () => void
+  deleteTimerProfile: () => Promise<void>
+  editingTimerProfileId: string | null
+  timerProfileNameDraft: string
+  setTimerProfileNameDraft: (name: string) => void
 }): React.ReactElement {
   const settings = timerState.settings
+  const activeProfile = timerState.profiles.find((profile) => profile.id === timerState.activeProfileId) ?? timerState.profiles[0]
   const [intervalDraft, setIntervalDraft] = useState(String(settings.intervalSeconds))
 
   useEffect(() => {
@@ -969,6 +1063,68 @@ function TimerPanel({
           <div className="panel-heading">
             <GearSix size={18} weight="bold" />
             <h2>倒计时设置</h2>
+          </div>
+
+          <div className="timer-profile-toolbar">
+            {editingTimerProfileId === timerState.activeProfileId ? (
+              <input
+                className="inline-edit-input"
+                value={timerProfileNameDraft}
+                autoFocus
+                onChange={(event) => setTimerProfileNameDraft(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveTimerProfileEdit()
+                  if (event.key === 'Escape') cancelTimerProfileEdit()
+                }}
+              />
+            ) : (
+              <select value={timerState.activeProfileId} onChange={(event) => void selectTimerProfile(event.currentTarget.value)}>
+                {timerState.profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button className="icon-button" type="button" onClick={createTimerProfile} aria-label="新增倒计时配置">
+              <Plus size={17} weight="bold" />
+            </button>
+            {editingTimerProfileId === timerState.activeProfileId ? (
+              <>
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => void saveTimerProfileEdit()}
+                  disabled={!timerProfileNameDraft.trim()}
+                  aria-label="保存倒计时配置名称"
+                >
+                  <Check size={17} weight="bold" />
+                </button>
+                <button className="icon-button" type="button" onClick={cancelTimerProfileEdit} aria-label="取消编辑倒计时配置">
+                  <X size={17} weight="bold" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="icon-button" type="button" onClick={beginTimerProfileEdit} aria-label="重命名倒计时配置">
+                  <PencilSimple size={17} weight="bold" />
+                </button>
+                <button
+                  className="icon-button danger"
+                  type="button"
+                  onClick={() => void deleteTimerProfile()}
+                  disabled={timerState.profiles.length <= 1}
+                  aria-label="删除倒计时配置"
+                >
+                  <Trash size={17} weight="bold" />
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="timer-profile-summary">
+            <span>当前配置</span>
+            <strong>{activeProfile?.name ?? '默认配置'}</strong>
           </div>
 
           <label className="number-field">
