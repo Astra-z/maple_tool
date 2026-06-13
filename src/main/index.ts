@@ -65,6 +65,7 @@ let currentLensSettings: LensSettings = { ...defaultLensSettings }
 let lensProfiles: LensProfile[] = []
 let activeLensProfileId = 'default'
 let activeLensCaptureId: string | null = null
+let lensVisible = false
 
 const defaultTimerSettings: TimerSettings = {
   intervalSeconds: 60,
@@ -568,7 +569,7 @@ function savePersistedState(): void {
     activeLensProfileId,
     activeLensCaptureId,
     lensProfileShortcutPrefix,
-    lensOpen: getOpenLensCaptureIds().length > 0,
+    lensOpen: lensVisible,
     timerSettings,
     hotkeySettings,
     timerOpen: Boolean(timerWindow && !timerWindow.isDestroyed()),
@@ -618,6 +619,7 @@ function restorePersistedState(): void {
 
   activeLensProfileId = persistedState.activeLensProfileId ?? lensProfiles[0].id
   activeLensCaptureId = persistedState.activeLensCaptureId ?? lensProfiles[0].captures[0]?.id ?? null
+  lensVisible = Boolean(persistedState.lensOpen)
   lensProfileShortcutPrefix = normalizeLensProfileShortcutPrefix(persistedState.lensProfileShortcutPrefix)
   ensureLensProfiles()
   timerSettings = normalizeTimerSettings(persistedState.timerSettings)
@@ -650,7 +652,7 @@ function getLensState(): LensState {
     })),
     activeProfileId: activeLensProfileId,
     activeCaptureId: activeLensCaptureId,
-    isOpen: Boolean(activeProfile?.captures.some((capture) => activeOpenCaptureIds.has(capture.id))),
+    isOpen: lensVisible && Boolean(activeProfile?.captures.length),
     openCaptureIds: [...activeOpenCaptureIds]
   }
 }
@@ -822,9 +824,13 @@ function createMainWindow(): void {
   })
 }
 
-function hideLens(options: { broadcast?: boolean } = {}): LensState {
+function hideLens(options: { broadcast?: boolean; preserveVisible?: boolean } = {}): LensState {
   const shouldBroadcast = options.broadcast ?? true
+  const shouldPreserveVisible = options.preserveVisible ?? false
   syncOpenLensWindowBounds()
+  if (!shouldPreserveVisible) {
+    lensVisible = false
+  }
 
   for (const [captureId, lensWindow] of lensWindows) {
     if (!lensWindow.isDestroyed()) {
@@ -844,6 +850,7 @@ function hideLens(options: { broadcast?: boolean } = {}): LensState {
 }
 
 function showLens(): LensState {
+  lensVisible = true
   const activeProfile = getActiveLensProfile()
   if (activeProfile) {
     for (const capture of activeProfile.captures) {
@@ -856,10 +863,7 @@ function showLens(): LensState {
 }
 
 function toggleLens(): LensState {
-  const activeProfile = getActiveLensProfile()
-  const openCaptureIds = new Set(getOpenLensCaptureIds())
-
-  if (activeProfile?.captures.some((capture) => openCaptureIds.has(capture.id))) {
+  if (lensVisible) {
     return hideLens()
   }
 
@@ -875,18 +879,21 @@ function selectLensProfile(profileId: string): LensState {
     return getLensState()
   }
 
-  const shouldRestoreLens = getOpenLensCaptureIds().length > 0
-  hideLens({ broadcast: false })
+  const shouldRestoreLens = lensVisible || getOpenLensCaptureIds().length > 0
+  hideLens({ broadcast: false, preserveVisible: true })
   activeLensProfileId = profileId
   activeLensCaptureId = getActiveLensProfile()?.captures[0]?.id ?? null
   const activeCapture = getActiveLensCapture()
   currentLensSettings = activeCapture ? normalizeLensSettings(activeCapture.settings) : { ...defaultLensSettings }
 
   if (shouldRestoreLens) {
+    lensVisible = true
     const activeProfile = getActiveLensProfile()
     for (const capture of activeProfile?.captures ?? []) {
       createLensWindow(capture)
     }
+  } else {
+    lensVisible = false
   }
 
   savePersistedState()
@@ -1174,6 +1181,7 @@ function createSelectorWindows(): void {
 }
 
 function createLensWindow(config: LensCapture): void {
+  lensVisible = true
   const existingWindow = lensWindows.get(config.id)
   if (existingWindow && !existingWindow.isDestroyed()) {
     applyLensWindowBehavior(existingWindow, config.settings)
@@ -1246,6 +1254,9 @@ function createLensWindow(config: LensCapture): void {
     const shouldMute = mutedLensClosedCaptureIds.delete(config.id)
     lensWindows.delete(config.id)
     if (!isQuitting && !shouldMute) {
+      if (getOpenLensCaptureIds().length === 0) {
+        lensVisible = false
+      }
       broadcastLensState()
       savePersistedState()
     }
