@@ -5,14 +5,36 @@ export const DEFAULT_HOTKEY_SETTINGS = {
   timerToggle: 'CommandOrControl+Shift+T'
 } as const
 
+export const DEFAULT_LENS_PROFILE_HOTKEY_PREFIX = 'CommandOrControl+Shift'
+
 export type HotkeyAction = (typeof HOTKEY_ACTIONS)[number]
 
 export type HotkeySettings = Record<HotkeyAction, string>
 
 export type HotkeyState = {
   settings: HotkeySettings
+  lensProfilePrefix: string
   registered: Record<HotkeyAction, boolean>
   error: string | null
+}
+
+export type AppInfo = {
+  name: string
+  version: string
+  platform: string
+  arch: string
+  releasePageUrl: string
+}
+
+export type UpdateCheckResult = {
+  currentVersion: string
+  latestVersion: string | null
+  hasUpdate: boolean
+  releaseName: string | null
+  releaseUrl: string | null
+  downloadUrl: string | null
+  error: string | null
+  checkedAt: string
 }
 
 export const TIMER_FONT_OPTIONS = [
@@ -59,9 +81,27 @@ export type LensConfig = {
   settings: LensSettings
 }
 
+export type LensCapture = LensConfig & {
+  id: string
+  name: string
+  windowBounds?: Rect
+}
+
+export type LensProfile = {
+  id: string
+  name: string
+  captures: LensCapture[]
+  shortcut?: string
+  shortcutRegistered?: boolean
+}
+
 export type LensState = {
-  config: LensConfig | null
+  config: LensCapture | null
+  profiles: LensProfile[]
+  activeProfileId: string
+  activeCaptureId: string | null
   isOpen: boolean
+  openCaptureIds: string[]
 }
 
 export type ScreenSource = {

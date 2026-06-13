@@ -2,35 +2,46 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import {
   Aperture,
+  ArrowClockwise,
+  ArrowSquareOut,
+  Check,
   ClockCountdown,
   Crosshair,
   Eye,
   FrameCorners,
   GearSix,
+  Info,
   Keyboard,
   LockKey,
   LockKeyOpen,
   MusicNote,
+  PencilSimple,
   Play,
+  Plus,
   Selection,
   Stop,
+  Trash,
+  UserCircle,
   X
 } from '@phosphor-icons/react'
-import { DEFAULT_HOTKEY_SETTINGS, TIMER_FONT_OPTIONS } from '../../shared/types'
+import { DEFAULT_HOTKEY_SETTINGS, DEFAULT_LENS_PROFILE_HOTKEY_PREFIX, TIMER_FONT_OPTIONS } from '../../shared/types'
 import type {
+  AppInfo,
   DisplayInfo,
   HotkeyAction,
   HotkeyState,
-  LensConfig,
+  LensCapture,
+  LensProfile,
   LensSettings,
   LensState,
   SelectionPayload,
   TimerSettings,
-  TimerState
+  TimerState,
+  UpdateCheckResult
 } from '../../shared/types'
 import './styles.css'
 
-type MainTool = 'lens' | 'timer' | 'hotkeys'
+type MainTool = 'lens' | 'timer' | 'hotkeys' | 'about'
 
 const defaultRendererSettings: LensSettings = {
   zoom: 1,
@@ -55,16 +66,35 @@ const defaultTimerState: TimerState = {
 
 const defaultLensState: LensState = {
   config: null,
-  isOpen: false
+  profiles: [
+    {
+      id: 'default',
+      name: '默认角色',
+      captures: []
+    }
+  ],
+  activeProfileId: 'default',
+  activeCaptureId: null,
+  isOpen: false,
+  openCaptureIds: []
 }
 
 const defaultHotkeyState: HotkeyState = {
   settings: { ...DEFAULT_HOTKEY_SETTINGS },
+  lensProfilePrefix: DEFAULT_LENS_PROFILE_HOTKEY_PREFIX,
   registered: {
     lensToggle: false,
     timerToggle: false
   },
   error: null
+}
+
+const defaultAppInfo: AppInfo = {
+  name: 'MapleTool',
+  version: '0.0.0',
+  platform: 'unknown',
+  arch: 'unknown',
+  releasePageUrl: 'https://github.com/Astra-z/maple_tool/releases'
 }
 
 let timerAudioContext: AudioContext | null = null
@@ -88,6 +118,10 @@ function getDisplayFromQuery(): DisplayInfo {
     },
     scaleFactor: Number(params.get('scaleFactor') ?? 1)
   }
+}
+
+function getCaptureIdFromQuery(): string | null {
+  return new URLSearchParams(window.location.search).get('captureId')
 }
 
 function rangeFill(value: number, min: number, max: number): React.CSSProperties {
@@ -116,9 +150,23 @@ function normalizeTimerState(state: TimerState): TimerState {
 }
 
 function normalizeLensState(state: LensState): LensState {
+  const profiles = Array.isArray(state.profiles) && state.profiles.length > 0 ? state.profiles : defaultLensState.profiles
+  const activeProfileId = profiles.some((profile) => profile.id === state.activeProfileId)
+    ? state.activeProfileId
+    : profiles[0].id
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0]
+  const activeCaptureId =
+    state.activeCaptureId && activeProfile.captures.some((capture) => capture.id === state.activeCaptureId)
+      ? state.activeCaptureId
+      : activeProfile.captures[0]?.id ?? null
+
   return {
-    config: state.config ?? null,
-    isOpen: Boolean(state.isOpen)
+    config: state.config ?? activeProfile.captures.find((capture) => capture.id === activeCaptureId) ?? null,
+    profiles,
+    activeProfileId,
+    activeCaptureId,
+    isOpen: Boolean(state.isOpen),
+    openCaptureIds: Array.isArray(state.openCaptureIds) ? state.openCaptureIds : []
   }
 }
 
@@ -128,6 +176,7 @@ function normalizeHotkeyState(state: HotkeyState): HotkeyState {
       ...DEFAULT_HOTKEY_SETTINGS,
       ...state.settings
     },
+    lensProfilePrefix: state.lensProfilePrefix ?? DEFAULT_LENS_PROFILE_HOTKEY_PREFIX,
     registered: {
       lensToggle: Boolean(state.registered?.lensToggle),
       timerToggle: Boolean(state.registered?.timerToggle)
@@ -185,10 +234,26 @@ function eventToShortcut(event: KeyboardEvent): string | null {
   return parts.join('+')
 }
 
+function shortcutToProfilePrefix(shortcut: string): string | null {
+  const parts = shortcut
+    .split('+')
+    .map((part) => part.trim())
+    .filter(Boolean)
+
+  if (parts.length < 2) return null
+
+  const key = parts[parts.length - 1]
+  const prefixParts = parts.slice(0, -1)
+
+  if (!/^[1-9]$/.test(key)) return null
+
+  return prefixParts.length > 0 ? prefixParts.join('+') : null
+}
+
 function getInitialMainTool(): MainTool {
   try {
     const savedTool = window.localStorage.getItem('maple.activeTool')
-    if (savedTool === 'lens' || savedTool === 'timer' || savedTool === 'hotkeys') {
+    if (savedTool === 'lens' || savedTool === 'timer' || savedTool === 'hotkeys' || savedTool === 'about') {
       return savedTool
     }
   } catch {
@@ -203,21 +268,30 @@ function MainPanel(): React.ReactElement {
   const [settings, setSettings] = useState<LensSettings>(defaultRendererSettings)
   const [timerState, setTimerState] = useState<TimerState>(defaultTimerState)
   const [hotkeyState, setHotkeyState] = useState<HotkeyState>(defaultHotkeyState)
+  const [appInfo, setAppInfo] = useState<AppInfo>(defaultAppInfo)
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [activeTool, setActiveTool] = useState<MainTool>(getInitialMainTool)
   const [busy, setBusy] = useState(false)
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null)
+  const [profileNameDraft, setProfileNameDraft] = useState('')
+  const [editingCaptureId, setEditingCaptureId] = useState<string | null>(null)
+  const [captureNameDraft, setCaptureNameDraft] = useState('')
   const timerSettingsRef = useRef(defaultTimerSettings)
+
+  const applyLensState = (nextState: LensState): void => {
+    const normalizedState = normalizeLensState(nextState)
+    setLensState(normalizedState)
+    setSettings(normalizedState.config?.settings ?? defaultRendererSettings)
+  }
 
   useEffect(() => {
     window.maple.getLensState().then((nextState) => {
-      const normalizedState = normalizeLensState(nextState)
-      setLensState(normalizedState)
-      if (normalizedState.config) setSettings(normalizedState.config.settings)
+      applyLensState(nextState)
     })
 
     return window.maple.onLensUpdated((nextState) => {
-      const normalizedState = normalizeLensState(nextState)
-      setLensState(normalizedState)
-      if (normalizedState.config) setSettings(normalizedState.config.settings)
+      applyLensState(nextState)
     })
   }, [])
 
@@ -232,8 +306,12 @@ function MainPanel(): React.ReactElement {
   }, [])
 
   useEffect(() => {
+    window.maple.getAppInfo().then(setAppInfo)
+  }, [])
+
+  useEffect(() => {
     return window.maple.onMainToolSelected((tool) => {
-      if (tool === 'lens' || tool === 'timer' || tool === 'hotkeys') {
+      if (tool === 'lens' || tool === 'timer' || tool === 'hotkeys' || tool === 'about') {
         setActiveTool(tool)
       }
     })
@@ -259,10 +337,23 @@ function MainPanel(): React.ReactElement {
 
   const updateSetting = (next: Partial<LensSettings>): void => {
     setSettings((current) => ({ ...current, ...next }))
-    window.maple.updateLensSettings(next)
+    window.maple.updateLensSettings(next, lensState.activeCaptureId ?? undefined)
     setLensState((current) => {
-      if (!current.config) return current
-      return { ...current, config: { ...current.config, settings: { ...current.config.settings, ...next } } }
+      if (!current.config || !current.activeCaptureId) return current
+
+      const updateCapture = (capture: LensCapture): LensCapture =>
+        capture.id === current.activeCaptureId
+          ? { ...capture, settings: { ...capture.settings, ...next } }
+          : capture
+
+      return {
+        ...current,
+        config: updateCapture(current.config),
+        profiles: current.profiles.map((profile) => ({
+          ...profile,
+          captures: profile.captures.map(updateCapture)
+        }))
+      }
     })
   }
 
@@ -273,12 +364,82 @@ function MainPanel(): React.ReactElement {
   }
 
   const toggleLens = async (): Promise<void> => {
-    const nextState = normalizeLensState(await window.maple.toggleLens())
-    setLensState(nextState)
-    if (nextState.config) setSettings(nextState.config.settings)
+    applyLensState(await window.maple.toggleLens())
+  }
+
+  const createLensProfile = async (): Promise<void> => {
+    applyLensState(await window.maple.createLensProfile(`角色 ${lensState.profiles.length + 1}`))
+  }
+
+  const beginProfileEdit = (): void => {
+    const activeProfile = lensState.profiles.find((profile) => profile.id === lensState.activeProfileId)
+    if (!activeProfile) return
+
+    setEditingProfileId(activeProfile.id)
+    setProfileNameDraft(activeProfile.name)
+  }
+
+  const saveProfileEdit = async (): Promise<void> => {
+    if (!editingProfileId) return
+    const name = profileNameDraft.trim()
+    if (!name) return
+
+    applyLensState(await window.maple.renameLensProfile(editingProfileId, name))
+    setEditingProfileId(null)
+    setProfileNameDraft('')
+  }
+
+  const cancelProfileEdit = (): void => {
+    setEditingProfileId(null)
+    setProfileNameDraft('')
+  }
+
+  const deleteLensProfile = async (): Promise<void> => {
+    if (lensState.profiles.length <= 1) return
+    const activeProfile = lensState.profiles.find((profile) => profile.id === lensState.activeProfileId)
+    if (!activeProfile || !window.confirm(`删除角色「${activeProfile.name}」及其全部截图？`)) return
+
+    applyLensState(await window.maple.deleteLensProfile(activeProfile.id))
+  }
+
+  const selectLensProfile = async (profileId: string): Promise<void> => {
+    applyLensState(await window.maple.selectLensProfile(profileId))
+  }
+
+  const selectLensCapture = async (captureId: string): Promise<void> => {
+    applyLensState(await window.maple.selectLensCapture(captureId))
+  }
+
+  const beginCaptureEdit = (capture: LensCapture): void => {
+    setEditingCaptureId(capture.id)
+    setCaptureNameDraft(capture.name)
+  }
+
+  const saveCaptureEdit = async (): Promise<void> => {
+    if (!editingCaptureId) return
+    const name = captureNameDraft.trim()
+    if (!name) return
+
+    applyLensState(await window.maple.renameLensCapture(editingCaptureId, name))
+    setEditingCaptureId(null)
+    setCaptureNameDraft('')
+  }
+
+  const cancelCaptureEdit = (): void => {
+    setEditingCaptureId(null)
+    setCaptureNameDraft('')
+  }
+
+  const deleteLensCapture = async (capture: LensCapture): Promise<void> => {
+    if (!window.confirm(`删除截图「${capture.name}」？`)) return
+
+    applyLensState(await window.maple.deleteLensCapture(capture.id))
   }
 
   const config = lensState.config
+  const activeProfile = lensState.profiles.find((profile) => profile.id === lensState.activeProfileId) ?? lensState.profiles[0]
+  const activeCaptures = activeProfile?.captures ?? []
+  const openCaptureIds = new Set(lensState.openCaptureIds)
 
   const updateTimerSetting = (next: Partial<TimerSettings>): void => {
     setTimerState((current) => ({
@@ -321,6 +482,20 @@ function MainPanel(): React.ReactElement {
     setHotkeyState(normalizeHotkeyState(nextState))
   }
 
+  const updateLensProfileHotkeyPrefix = async (prefix: string): Promise<void> => {
+    const nextState = await window.maple.updateLensProfileHotkeyPrefix(prefix)
+    setHotkeyState(normalizeHotkeyState(nextState))
+  }
+
+  const checkForUpdates = async (): Promise<void> => {
+    setCheckingUpdate(true)
+    try {
+      setUpdateResult(await window.maple.checkForUpdates())
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
   return (
     <main className="app-shell">
       <aside className="tool-sidebar">
@@ -359,6 +534,14 @@ function MainPanel(): React.ReactElement {
             <Keyboard size={18} weight="bold" />
             <span>热键</span>
           </button>
+          <button
+            className={`tool-nav-item ${activeTool === 'about' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setActiveTool('about')}
+          >
+            <Info size={18} weight="bold" />
+            <span>关于</span>
+          </button>
         </nav>
 
       </aside>
@@ -374,20 +557,155 @@ function MainPanel(): React.ReactElement {
               </div>
 
               <div className="header-actions">
-                {config && (
+                {activeCaptures.length > 0 && (
                   <button className="secondary-button" type="button" onClick={toggleLens}>
                     <Eye size={17} />
-                    <span>{lensState.isOpen ? '隐藏放大镜' : '展示放大镜'}</span>
+                    <span>{lensState.isOpen ? '隐藏全部' : '展示全部'}</span>
                   </button>
                 )}
                 <button className="primary-button" type="button" onClick={startSelection} disabled={busy}>
                   <Selection size={18} weight="bold" />
-                  <span>{busy ? '选择中' : config ? '重新选择区域' : '选择区域'}</span>
+                  <span>{busy ? '选择中' : '添加截图区域'}</span>
                 </button>
               </div>
             </section>
 
             <section className="lens-grid">
+              <section className="settings-panel lens-config-panel" aria-label="角色和截图配置">
+                <div className="panel-heading">
+                  <UserCircle size={18} weight="bold" />
+                  <h2>角色配置</h2>
+                </div>
+
+                <div className="profile-toolbar">
+                  {editingProfileId === lensState.activeProfileId ? (
+                    <input
+                      className="inline-edit-input"
+                      value={profileNameDraft}
+                      autoFocus
+                      onChange={(event) => setProfileNameDraft(event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void saveProfileEdit()
+                        if (event.key === 'Escape') cancelProfileEdit()
+                      }}
+                    />
+                  ) : (
+                    <select value={lensState.activeProfileId} onChange={(event) => void selectLensProfile(event.currentTarget.value)}>
+                      {lensState.profiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}（{profile.captures.length}）
+                          {profile.shortcut ? ` · ${formatShortcut(profile.shortcut)}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button className="icon-button" type="button" onClick={createLensProfile} aria-label="新增角色">
+                    <Plus size={17} weight="bold" />
+                  </button>
+                  {editingProfileId === lensState.activeProfileId ? (
+                    <>
+                      <button
+                        className="icon-button"
+                        type="button"
+                        onClick={() => void saveProfileEdit()}
+                        disabled={!profileNameDraft.trim()}
+                        aria-label="保存角色名称"
+                      >
+                        <Check size={17} weight="bold" />
+                      </button>
+                      <button className="icon-button" type="button" onClick={cancelProfileEdit} aria-label="取消编辑角色">
+                        <X size={17} weight="bold" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="icon-button" type="button" onClick={beginProfileEdit} aria-label="重命名角色">
+                        <PencilSimple size={17} weight="bold" />
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        type="button"
+                        onClick={deleteLensProfile}
+                        disabled={lensState.profiles.length <= 1}
+                        aria-label="删除角色"
+                      >
+                        <Trash size={17} weight="bold" />
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <div className={`profile-hotkey-hint ${activeProfile?.shortcutRegistered ? '' : 'is-muted'}`}>
+                  快捷切换：
+                  <strong>{activeProfile?.shortcut ? formatShortcut(activeProfile.shortcut) : '前 9 个角色自动分配'}</strong>
+                  {activeProfile?.shortcut && !activeProfile.shortcutRegistered ? <span>未注册，可能已被占用</span> : null}
+                </div>
+
+                <div className="capture-list">
+                  {activeCaptures.length === 0 ? (
+                    <div className="empty-capture">
+                      <Selection size={20} weight="bold" />
+                      <span>当前角色还没有截图区域</span>
+                    </div>
+                  ) : (
+                    activeCaptures.map((capture) => {
+                      const selected = capture.id === lensState.activeCaptureId
+                      const open = openCaptureIds.has(capture.id)
+
+                      return (
+                        <div className={`capture-row ${selected ? 'is-selected' : ''}`} key={capture.id}>
+                          {editingCaptureId === capture.id ? (
+                            <>
+                              <input
+                                className="capture-edit-input"
+                                value={captureNameDraft}
+                                autoFocus
+                                onChange={(event) => setCaptureNameDraft(event.currentTarget.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') void saveCaptureEdit()
+                                  if (event.key === 'Escape') cancelCaptureEdit()
+                                }}
+                              />
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() => void saveCaptureEdit()}
+                                disabled={!captureNameDraft.trim()}
+                                aria-label="保存截图名称"
+                              >
+                                <Check size={16} weight="bold" />
+                              </button>
+                              <button className="icon-button" type="button" onClick={cancelCaptureEdit} aria-label="取消编辑截图">
+                                <X size={16} weight="bold" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button className="capture-main" type="button" onClick={() => void selectLensCapture(capture.id)}>
+                                <FrameCorners size={18} weight="bold" />
+                                <span>
+                                  <strong>{capture.name}</strong>
+                                  <small>
+                                    {Math.round(capture.region.width)} x {Math.round(capture.region.height)}
+                                    {open ? ' · 已展示' : ' · 已保存'}
+                                  </small>
+                                </span>
+                              </button>
+                              <button className="icon-button" type="button" onClick={() => beginCaptureEdit(capture)} aria-label="重命名截图">
+                                <PencilSimple size={16} weight="bold" />
+                              </button>
+                              <button className="icon-button danger" type="button" onClick={() => void deleteLensCapture(capture)} aria-label="删除截图">
+                                <Trash size={16} weight="bold" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </section>
+
               <section className="settings-panel" aria-label="显示设置">
                 <div className="panel-heading">
                   <GearSix size={18} weight="bold" />
@@ -406,6 +724,7 @@ function MainPanel(): React.ReactElement {
                   <span>放大倍率</span>
                   <b>{settings.zoom.toFixed(1)}x</b>
                   <input
+                    disabled={!config}
                     type="range"
                     min="1"
                     max="5"
@@ -420,6 +739,7 @@ function MainPanel(): React.ReactElement {
                   <span>放大内容透明度</span>
                   <b>{Math.round(settings.opacity * 100)}%</b>
                   <input
+                    disabled={!config}
                     type="range"
                     min="0.35"
                     max="1"
@@ -433,6 +753,7 @@ function MainPanel(): React.ReactElement {
                 <button
                   className={`lock-toggle ${settings.locked ? 'is-on' : ''}`}
                   type="button"
+                  disabled={!config}
                   onClick={() => updateSetting({ locked: !settings.locked })}
                 >
                   {settings.locked ? <LockKey size={19} weight="bold" /> : <LockKeyOpen size={19} weight="bold" />}
@@ -453,11 +774,116 @@ function MainPanel(): React.ReactElement {
             startTimer={startTimer}
             stopTimer={stopTimer}
           />
+        ) : activeTool === 'hotkeys' ? (
+          <HotkeysPanel
+            hotkeyState={hotkeyState}
+            lensProfiles={lensState.profiles}
+            updateHotkey={updateHotkey}
+            resetHotkey={resetHotkey}
+            updateLensProfileHotkeyPrefix={updateLensProfileHotkeyPrefix}
+          />
         ) : (
-          <HotkeysPanel hotkeyState={hotkeyState} updateHotkey={updateHotkey} resetHotkey={resetHotkey} />
+          <AboutPanel
+            appInfo={appInfo}
+            updateResult={updateResult}
+            checkingUpdate={checkingUpdate}
+            checkForUpdates={checkForUpdates}
+          />
         )}
       </section>
     </main>
+  )
+}
+
+function AboutPanel({
+  appInfo,
+  updateResult,
+  checkingUpdate,
+  checkForUpdates
+}: {
+  appInfo: AppInfo
+  updateResult: UpdateCheckResult | null
+  checkingUpdate: boolean
+  checkForUpdates: () => Promise<void>
+}): React.ReactElement {
+  const updateUrl = updateResult?.downloadUrl ?? updateResult?.releaseUrl ?? appInfo.releasePageUrl
+  const latestVersionText = updateResult?.latestVersion ?? '未检查'
+  const updateStatus = !updateResult
+    ? '点击检查更新获取最新 Release'
+    : updateResult.error
+      ? updateResult.error
+      : updateResult.hasUpdate
+        ? `发现新版本 ${updateResult.latestVersion}`
+        : '当前已是最新版本'
+
+  return (
+    <>
+      <section className="tool-header">
+        <div>
+          <p className="section-kicker">关于</p>
+          <h1>MapleTool</h1>
+          <p className="header-copy">面向 GMS 国际服冒险岛玩家的小工具。版本信息和更新入口都在这里。</p>
+        </div>
+
+        <div className="header-actions">
+          <button className="secondary-button" type="button" onClick={() => void checkForUpdates()} disabled={checkingUpdate}>
+            <ArrowClockwise size={17} weight="bold" />
+            <span>{checkingUpdate ? '检查中' : '检查更新'}</span>
+          </button>
+          <button className="primary-button" type="button" onClick={() => void window.maple.openReleasePage(updateUrl)}>
+            <ArrowSquareOut size={17} weight="bold" />
+            <span>打开下载页</span>
+          </button>
+        </div>
+      </section>
+
+      <section className="about-grid">
+        <section className="about-panel" aria-label="版本信息">
+          <div className="panel-heading">
+            <Info size={18} weight="bold" />
+            <h2>版本信息</h2>
+          </div>
+
+          <div className="version-card">
+            <span>当前版本</span>
+            <strong>v{appInfo.version}</strong>
+            <small>
+              {appInfo.platform} / {appInfo.arch}
+            </small>
+          </div>
+
+          <div className="meta-grid">
+            <div>
+              <span>应用名称</span>
+              <strong>{appInfo.name}</strong>
+            </div>
+            <div>
+              <span>更新来源</span>
+              <strong>GitHub Release</strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="about-panel" aria-label="更新状态">
+          <div className="panel-heading">
+            <ArrowClockwise size={18} weight="bold" />
+            <h2>更新状态</h2>
+          </div>
+
+          <div className={`update-status ${updateResult?.error ? 'is-error' : updateResult?.hasUpdate ? 'has-update' : ''}`}>
+            <span>最新版本</span>
+            <strong>{latestVersionText}</strong>
+            <small>{updateStatus}</small>
+          </div>
+
+          {updateResult?.checkedAt && (
+            <p className="about-note">上次检查：{new Date(updateResult.checkedAt).toLocaleString()}</p>
+          )}
+
+          <p className="about-note">如果自动检查失败，通常是 GitHub 仓库为私有或网络不可用，可以直接打开下载页查看 Release。</p>
+        </section>
+      </section>
+    </>
   )
 }
 
@@ -636,18 +1062,23 @@ function TimerPanel({
 
 function HotkeysPanel({
   hotkeyState,
+  lensProfiles,
   updateHotkey,
-  resetHotkey
+  resetHotkey,
+  updateLensProfileHotkeyPrefix
 }: {
   hotkeyState: HotkeyState
+  lensProfiles: LensProfile[]
   updateHotkey: (action: HotkeyAction, shortcut: string) => Promise<void>
   resetHotkey: (action: HotkeyAction) => Promise<void>
+  updateLensProfileHotkeyPrefix: (prefix: string) => Promise<void>
 }): React.ReactElement {
   const [capturingAction, setCapturingAction] = useState<HotkeyAction | null>(null)
+  const [capturingProfilePrefix, setCapturingProfilePrefix] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!capturingAction) return
+    if (!capturingAction && !capturingProfilePrefix) return
 
     const onKeyDown = (event: KeyboardEvent): void => {
       event.preventDefault()
@@ -655,6 +1086,7 @@ function HotkeysPanel({
 
       if (event.key === 'Escape') {
         setCapturingAction(null)
+        setCapturingProfilePrefix(false)
         setCaptureError(null)
         return
       }
@@ -666,6 +1098,22 @@ function HotkeysPanel({
         return
       }
 
+      if (capturingProfilePrefix) {
+        const prefix = shortcutToProfilePrefix(shortcut)
+
+        if (!prefix) {
+          setCaptureError('录制角色前缀时请按下“前缀 + 1”，例如 Ctrl + Shift + 1。')
+          return
+        }
+
+        setCaptureError(null)
+        setCapturingProfilePrefix(false)
+        void updateLensProfileHotkeyPrefix(prefix)
+        return
+      }
+
+      if (!capturingAction) return
+
       setCaptureError(null)
       setCapturingAction(null)
       void updateHotkey(capturingAction, shortcut)
@@ -673,7 +1121,7 @@ function HotkeysPanel({
 
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [capturingAction, updateHotkey])
+  }, [capturingAction, capturingProfilePrefix, updateHotkey, updateLensProfileHotkeyPrefix])
 
   const rows: Array<{
     action: HotkeyAction
@@ -683,7 +1131,7 @@ function HotkeysPanel({
     {
       action: 'lensToggle',
       title: '打开 / 关闭放大镜浮层',
-      description: '全局生效，关闭后再次按下会恢复上次选区和浮层位置。'
+      description: '全局生效，关闭后再次按下会恢复当前角色的全部截图浮层。'
     },
     {
       action: 'timerToggle',
@@ -720,7 +1168,14 @@ function HotkeysPanel({
                   <span>{row.description}</span>
                 </div>
                 <span className={`hotkey-scope ${registered ? '' : 'is-error'}`}>{registered ? '已生效' : '未注册'}</span>
-                <button className={`hotkey-recorder ${isCapturing ? 'is-recording' : ''}`} type="button" onClick={() => setCapturingAction(row.action)}>
+                <button
+                  className={`hotkey-recorder ${isCapturing ? 'is-recording' : ''}`}
+                  type="button"
+                  onClick={() => {
+                    setCapturingProfilePrefix(false)
+                    setCapturingAction(row.action)
+                  }}
+                >
                   {isCapturing ? '按下组合键' : formatShortcut(hotkeyState.settings[row.action])}
                 </button>
                 <button className="secondary-button compact-button" type="button" onClick={() => resetHotkey(row.action)}>
@@ -729,6 +1184,37 @@ function HotkeysPanel({
               </div>
             )
           })}
+        </div>
+
+        <div className="readonly-hotkey-list">
+          <div className="readonly-hotkey-heading">
+            <div>
+              <h3>角色切换</h3>
+              <span>前 9 个角色会自动使用此前缀加数字。</span>
+            </div>
+            <button
+              className={`hotkey-recorder ${capturingProfilePrefix ? 'is-recording' : ''}`}
+              type="button"
+              onClick={() => {
+                setCapturingAction(null)
+                setCapturingProfilePrefix(true)
+              }}
+            >
+              {capturingProfilePrefix ? '按前缀 + 1' : formatShortcut(hotkeyState.lensProfilePrefix)}
+            </button>
+          </div>
+          {lensProfiles.map((profile) => (
+            <div className="readonly-hotkey-row" key={profile.id}>
+              <div className="hotkey-copy">
+                <strong>{profile.name}</strong>
+                <span>{profile.captures.length} 个截图区域</span>
+              </div>
+              <span className={`hotkey-scope ${profile.shortcutRegistered ? '' : 'is-error'}`}>
+                {profile.shortcutRegistered ? '已生效' : '未注册'}
+              </span>
+              <code>{profile.shortcut ? formatShortcut(profile.shortcut) : '无'}</code>
+            </div>
+          ))}
         </div>
 
         {(captureError || hotkeyState.error) && <p className="hotkey-error">{captureError ?? hotkeyState.error}</p>}
@@ -870,23 +1356,32 @@ function SelectorOverlay(): React.ReactElement {
 }
 
 function LensWindow(): React.ReactElement {
+  const captureId = useMemo(getCaptureIdFromQuery, [])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const animationRef = useRef<number | null>(null)
-  const [config, setConfig] = useState<LensConfig | null>(null)
+  const [config, setConfig] = useState<LensCapture | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    window.maple.getLensConfig().then((nextConfig) => {
+    window.maple.getLensConfig(captureId ?? undefined).then((nextConfig) => {
       setConfig(nextConfig)
       if (!nextConfig) {
         setError('未选择区域。')
       }
     })
-    return window.maple.onLensSettings((settings) => {
-      setConfig((current) => (current ? { ...current, settings } : current))
+
+    return window.maple.onLensUpdated((state) => {
+      const nextConfig =
+        (captureId
+          ? state.profiles.flatMap((profile) => profile.captures).find((capture) => capture.id === captureId)
+          : state.config) ?? null
+      setConfig(nextConfig)
+      if (!nextConfig) {
+        setError('截图区域已删除。')
+      }
     })
-  }, [])
+  }, [captureId])
 
   useEffect(() => {
     if (!config) return

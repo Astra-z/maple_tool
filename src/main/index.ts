@@ -1,33 +1,49 @@
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, screen } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, screen, shell } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { DEFAULT_HOTKEY_SETTINGS, HOTKEY_ACTIONS, TIMER_FONT_OPTIONS } from '../shared/types'
+import {
+  DEFAULT_HOTKEY_SETTINGS,
+  DEFAULT_LENS_PROFILE_HOTKEY_PREFIX,
+  HOTKEY_ACTIONS,
+  TIMER_FONT_OPTIONS
+} from '../shared/types'
 import type {
   DisplayInfo,
   HotkeyAction,
   HotkeySettings,
   HotkeyState,
+  LensCapture,
   LensConfig,
+  LensProfile,
   LensSettings,
   LensState,
   Rect,
   SelectionPayload,
   TimerSettings,
-  TimerState
+  TimerState,
+  UpdateCheckResult
 } from '../shared/types'
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
+const releasePageUrl = 'https://github.com/Astra-z/maple_tool/releases'
+const latestReleaseApiUrl = 'https://api.github.com/repos/Astra-z/maple_tool/releases/latest'
 
 let mainWindow: BrowserWindow | null = null
-let lensWindow: BrowserWindow | null = null
+let lensWindows = new Map<string, BrowserWindow>()
 let timerWindow: BrowserWindow | null = null
 let selectorWindows: BrowserWindow[] = []
-let lensConfig: LensConfig | null = null
+let mutedLensClosedCaptureIds = new Set<string>()
 let isQuitting = false
 
 type PersistedAppState = {
   mainWindowBounds?: Electron.Rectangle
   currentLensSettings?: Partial<LensSettings>
+  lensProfiles?: LensProfile[]
+  activeLensProfileId?: string
+  activeLensCaptureId?: string | null
+  lensProfileShortcutPrefix?: string
+  // Legacy single-lens fields kept for migrating existing local caches.
   lensConfig?: LensConfig | null
   lensOpen?: boolean
   lensWindowBounds?: Electron.Rectangle
@@ -46,6 +62,9 @@ const defaultLensSettings: LensSettings = {
 }
 
 let currentLensSettings: LensSettings = { ...defaultLensSettings }
+let lensProfiles: LensProfile[] = []
+let activeLensProfileId = 'default'
+let activeLensCaptureId: string | null = null
 
 const defaultTimerSettings: TimerSettings = {
   intervalSeconds: 60,
@@ -63,10 +82,12 @@ let timerRunning = false
 let timerReachedZero = false
 let timerAudioCache: { path: string; mtimeMs: number; dataUrl: string } | null = null
 let hotkeySettings: HotkeySettings = { ...DEFAULT_HOTKEY_SETTINGS }
+let lensProfileShortcutPrefix = DEFAULT_LENS_PROFILE_HOTKEY_PREFIX
 let registeredHotkeys: Record<HotkeyAction, boolean> = {
   lensToggle: false,
   timerToggle: false
 }
+let registeredLensProfileShortcuts = new Map<string, boolean>()
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -82,6 +103,190 @@ function normalizeLensSettings(settings?: Partial<LensSettings>): LensSettings {
 
 function mergeLensSettings(settings: Partial<LensSettings>): LensSettings {
   return normalizeLensSettings({ ...currentLensSettings, ...settings })
+}
+
+function normalizeVersion(version: string): number[] {
+  return version
+    .trim()
+    .replace(/^v/i, '')
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part))
+}
+
+function compareVersions(currentVersion: string, latestVersion: string): number {
+  const currentParts = normalizeVersion(currentVersion)
+  const latestParts = normalizeVersion(latestVersion)
+  const length = Math.max(currentParts.length, latestParts.length)
+
+  for (let index = 0; index < length; index += 1) {
+    const currentPart = currentParts[index] ?? 0
+    const latestPart = latestParts[index] ?? 0
+
+    if (latestPart > currentPart) return 1
+    if (latestPart < currentPart) return -1
+  }
+
+  return 0
+}
+
+function createId(prefix: string): string {
+  return `${prefix}-${randomUUID()}`
+}
+
+function createDefaultLensProfile(): LensProfile {
+  return {
+    id: 'default',
+    name: '默认角色',
+    captures: []
+  }
+}
+
+function normalizeRect(rect?: Partial<Rect>, minWidth = 1, minHeight = 1): Rect | null {
+  if (!rect) return null
+
+  const x = Math.round(Number(rect.x))
+  const y = Math.round(Number(rect.y))
+  const width = Math.round(Number(rect.width))
+  const height = Math.round(Number(rect.height))
+
+  if (![x, y, width, height].every(Number.isFinite) || width < minWidth || height < minHeight) {
+    return null
+  }
+
+  return { x, y, width, height }
+}
+
+function normalizeDisplayInfo(display?: Partial<DisplayInfo>): DisplayInfo | null {
+  const bounds = normalizeRect(display?.bounds, 1, 1)
+  if (!display || !bounds) return null
+
+  const scaleFactor = Number(display.scaleFactor)
+
+  return {
+    id: String(display.id ?? '0'),
+    bounds,
+    scaleFactor: Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1
+  }
+}
+
+function normalizeLensCapture(capture: Partial<LensCapture>, index: number): LensCapture | null {
+  const display = normalizeDisplayInfo(capture.display)
+  const region = normalizeRect(capture.region, 20, 20)
+
+  if (!display || !region) return null
+
+  return {
+    id: typeof capture.id === 'string' && capture.id.trim() ? capture.id : createId('capture'),
+    name: typeof capture.name === 'string' && capture.name.trim() ? capture.name.trim() : `技能 ${index + 1}`,
+    display,
+    region,
+    settings: normalizeLensSettings(capture.settings),
+    windowBounds: normalizeRect(capture.windowBounds, 80, 60) ?? undefined
+  }
+}
+
+function normalizeLensProfiles(profiles?: LensProfile[]): LensProfile[] {
+  if (!Array.isArray(profiles)) return []
+
+  return profiles
+    .map((profile, profileIndex) => {
+      const captures = Array.isArray(profile?.captures)
+        ? profile.captures
+            .map((capture, captureIndex) => normalizeLensCapture(capture, captureIndex))
+            .filter((capture): capture is LensCapture => Boolean(capture))
+        : []
+
+      return {
+        id: typeof profile?.id === 'string' && profile.id.trim() ? profile.id : createId('profile'),
+        name:
+          typeof profile?.name === 'string' && profile.name.trim()
+            ? profile.name.trim()
+            : profileIndex === 0
+              ? '默认角色'
+              : `角色 ${profileIndex + 1}`,
+        captures
+      }
+    })
+    .filter((profile) => profile.name.length > 0)
+}
+
+function ensureLensProfiles(): void {
+  if (lensProfiles.length === 0) {
+    lensProfiles = [createDefaultLensProfile()]
+  }
+
+  if (!lensProfiles.some((profile) => profile.id === activeLensProfileId)) {
+    activeLensProfileId = lensProfiles[0].id
+  }
+
+  const activeProfile = getActiveLensProfile()
+  if (!activeProfile) return
+
+  if (!activeLensCaptureId || !activeProfile.captures.some((capture) => capture.id === activeLensCaptureId)) {
+    activeLensCaptureId = activeProfile.captures[0]?.id ?? null
+  }
+
+  const activeCapture = getActiveLensCapture()
+  if (activeCapture) {
+    currentLensSettings = normalizeLensSettings(activeCapture.settings)
+  }
+}
+
+function getActiveLensProfile(): LensProfile | null {
+  return lensProfiles.find((profile) => profile.id === activeLensProfileId) ?? lensProfiles[0] ?? null
+}
+
+function getActiveLensCapture(): LensCapture | null {
+  const activeProfile = getActiveLensProfile()
+  if (!activeProfile || !activeLensCaptureId) return null
+  return activeProfile.captures.find((capture) => capture.id === activeLensCaptureId) ?? null
+}
+
+function findLensCapture(captureId: string): { profile: LensProfile; capture: LensCapture } | null {
+  for (const profile of lensProfiles) {
+    const capture = profile.captures.find((item) => item.id === captureId)
+    if (capture) return { profile, capture }
+  }
+
+  return null
+}
+
+function updateLensCapture(captureId: string, updater: (capture: LensCapture) => LensCapture): LensCapture | null {
+  let updatedCapture: LensCapture | null = null
+
+  lensProfiles = lensProfiles.map((profile) => ({
+    ...profile,
+    captures: profile.captures.map((capture) => {
+      if (capture.id !== captureId) return capture
+      updatedCapture = updater(capture)
+      return updatedCapture
+    })
+  }))
+
+  return updatedCapture
+}
+
+function syncOpenLensWindowBounds(): void {
+  for (const [captureId, lensWindow] of lensWindows) {
+    if (lensWindow.isDestroyed()) continue
+    const bounds = lensWindow.getBounds()
+    updateLensCapture(captureId, (capture) => ({
+      ...capture,
+      windowBounds: {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height
+      }
+    }))
+  }
+}
+
+function getOpenLensCaptureIds(): string[] {
+  return [...lensWindows.entries()]
+    .filter(([, lensWindow]) => !lensWindow.isDestroyed())
+    .map(([captureId]) => captureId)
 }
 
 function normalizeTimerSettings(settings?: Partial<TimerSettings>): TimerSettings {
@@ -109,12 +314,160 @@ function normalizeHotkeySettings(settings?: Partial<HotkeySettings>): HotkeySett
   }, {} as HotkeySettings)
 }
 
+function normalizeLensProfileShortcutPrefix(prefix?: string): string {
+  if (typeof prefix !== 'string') return DEFAULT_LENS_PROFILE_HOTKEY_PREFIX
+
+  const tokens = prefix
+    .split('+')
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const normalizedTokens: string[] = []
+
+  for (const token of tokens) {
+    const lowerToken = token.toLowerCase()
+    const normalizedToken =
+      lowerToken === 'ctrl' || lowerToken === 'control' || lowerToken === 'cmd' || lowerToken === 'command'
+        ? 'CommandOrControl'
+        : lowerToken === 'commandorcontrol' || lowerToken === 'commandorctrl'
+          ? 'CommandOrControl'
+          : lowerToken === 'alt' || lowerToken === 'option'
+            ? 'Alt'
+            : lowerToken === 'shift'
+              ? 'Shift'
+              : null
+
+    if (normalizedToken && !normalizedTokens.includes(normalizedToken)) {
+      normalizedTokens.push(normalizedToken)
+    }
+  }
+
+  return normalizedTokens.length > 0 ? normalizedTokens.join('+') : DEFAULT_LENS_PROFILE_HOTKEY_PREFIX
+}
+
+function lensProfileShortcut(index: number): string | undefined {
+  if (index < 0 || index > 8) return undefined
+  return `${lensProfileShortcutPrefix}+${index + 1}`
+}
+
 function getHotkeyState(error: string | null = null): HotkeyState {
   return {
     settings: hotkeySettings,
+    lensProfilePrefix: lensProfileShortcutPrefix,
     registered: registeredHotkeys,
     error
   }
+}
+
+type GitHubReleaseAsset = {
+  name?: string
+  browser_download_url?: string
+}
+
+type GitHubRelease = {
+  tag_name?: string
+  name?: string
+  html_url?: string
+  assets?: GitHubReleaseAsset[]
+}
+
+function pickReleaseDownloadUrl(release: GitHubRelease): string | null {
+  const assets = Array.isArray(release.assets) ? release.assets : []
+
+  if (process.platform === 'win32') {
+    return assets.find((asset) => asset.browser_download_url && asset.name?.toLowerCase().endsWith('.exe'))
+      ?.browser_download_url ?? null
+  }
+
+  if (process.platform === 'darwin') {
+    return assets.find((asset) => asset.browser_download_url && /\.(dmg|zip)$/i.test(asset.name ?? ''))
+      ?.browser_download_url ?? null
+  }
+
+  return assets.find((asset) => asset.browser_download_url)?.browser_download_url ?? null
+}
+
+function getAppInfo() {
+  return {
+    name: app.getName(),
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    releasePageUrl
+  }
+}
+
+async function checkForUpdates(): Promise<UpdateCheckResult> {
+  const currentVersion = app.getVersion()
+  const checkedAt = new Date().toISOString()
+
+  try {
+    const response = await fetch(latestReleaseApiUrl, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `MapleTool/${currentVersion}`
+      }
+    })
+
+    if (!response.ok) {
+      return {
+        currentVersion,
+        latestVersion: null,
+        hasUpdate: false,
+        releaseName: null,
+        releaseUrl: releasePageUrl,
+        downloadUrl: null,
+        error:
+          response.status === 404
+            ? '无法读取最新版本。当前 GitHub 仓库可能是私有仓库，请打开 Release 页面手动查看。'
+            : `检查更新失败：GitHub 返回 ${response.status}。`,
+        checkedAt
+      }
+    }
+
+    const release = (await response.json()) as GitHubRelease
+    const latestVersion = release.tag_name?.trim() ?? null
+    const releaseUrl = release.html_url ?? releasePageUrl
+    const hasUpdate = latestVersion ? compareVersions(currentVersion, latestVersion) > 0 : false
+
+    return {
+      currentVersion,
+      latestVersion,
+      hasUpdate,
+      releaseName: release.name ?? latestVersion,
+      releaseUrl,
+      downloadUrl: pickReleaseDownloadUrl(release),
+      error: latestVersion ? null : '最新版本信息不完整，请打开 Release 页面手动查看。',
+      checkedAt
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    return {
+      currentVersion,
+      latestVersion: null,
+      hasUpdate: false,
+      releaseName: null,
+      releaseUrl: releasePageUrl,
+      downloadUrl: null,
+      error: `检查更新失败：${message}`,
+      checkedAt
+    }
+  }
+}
+
+function safeReleaseUrl(url?: string): string {
+  if (!url) return releasePageUrl
+
+  try {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.hostname === 'github.com' && parsedUrl.pathname.startsWith('/Astra-z/maple_tool/')) {
+      return parsedUrl.toString()
+    }
+  } catch {
+    return releasePageUrl
+  }
+
+  return releasePageUrl
 }
 
 function broadcastHotkeyState(error: string | null = null): void {
@@ -202,18 +555,20 @@ function readPersistedState(): PersistedAppState {
 function savePersistedState(): void {
   if (!app.isReady()) return
 
+  syncOpenLensWindowBounds()
+  ensureLensProfiles()
+
   const nextState: PersistedAppState = {
     mainWindowBounds:
       mainWindow && !mainWindow.isDestroyed()
         ? mainWindow.getBounds()
         : normalizeWindowBounds(persistedState.mainWindowBounds),
     currentLensSettings,
-    lensConfig,
-    lensOpen: Boolean(lensWindow && !lensWindow.isDestroyed()),
-    lensWindowBounds:
-      lensWindow && !lensWindow.isDestroyed()
-        ? lensWindow.getBounds()
-        : normalizeWindowBounds(persistedState.lensWindowBounds),
+    lensProfiles,
+    activeLensProfileId,
+    activeLensCaptureId,
+    lensProfileShortcutPrefix,
+    lensOpen: getOpenLensCaptureIds().length > 0,
     timerSettings,
     hotkeySettings,
     timerOpen: Boolean(timerWindow && !timerWindow.isDestroyed()),
@@ -236,16 +591,38 @@ function savePersistedState(): void {
 function restorePersistedState(): void {
   persistedState = readPersistedState()
   currentLensSettings = normalizeLensSettings(persistedState.currentLensSettings)
+  lensProfiles = normalizeLensProfiles(persistedState.lensProfiles)
+
+  if (lensProfiles.length === 0 && persistedState.lensConfig) {
+    const migratedCapture = normalizeLensCapture(
+      {
+        ...persistedState.lensConfig,
+        id: 'legacy-capture',
+        name: '技能 1',
+        windowBounds: normalizeWindowBounds(persistedState.lensWindowBounds)
+      },
+      0
+    )
+
+    lensProfiles = [
+      {
+        ...createDefaultLensProfile(),
+        captures: migratedCapture ? [migratedCapture] : []
+      }
+    ]
+  }
+
+  if (lensProfiles.length === 0) {
+    lensProfiles = [createDefaultLensProfile()]
+  }
+
+  activeLensProfileId = persistedState.activeLensProfileId ?? lensProfiles[0].id
+  activeLensCaptureId = persistedState.activeLensCaptureId ?? lensProfiles[0].captures[0]?.id ?? null
+  lensProfileShortcutPrefix = normalizeLensProfileShortcutPrefix(persistedState.lensProfileShortcutPrefix)
+  ensureLensProfiles()
   timerSettings = normalizeTimerSettings(persistedState.timerSettings)
   hotkeySettings = normalizeHotkeySettings(persistedState.hotkeySettings)
   resetTimerDeadline()
-
-  if (persistedState.lensConfig) {
-    lensConfig = {
-      ...persistedState.lensConfig,
-      settings: currentLensSettings
-    }
-  }
 }
 
 function getTimerRemainingSeconds(): number {
@@ -260,9 +637,21 @@ function resetTimerDeadline(): void {
 }
 
 function getLensState(): LensState {
+  ensureLensProfiles()
+  const activeProfile = getActiveLensProfile()
+  const activeOpenCaptureIds = new Set(getOpenLensCaptureIds())
+
   return {
-    config: lensConfig,
-    isOpen: Boolean(lensWindow && !lensWindow.isDestroyed())
+    config: getActiveLensCapture(),
+    profiles: lensProfiles.map((profile, index) => ({
+      ...profile,
+      shortcut: lensProfileShortcut(index),
+      shortcutRegistered: registeredLensProfileShortcuts.get(profile.id) ?? false
+    })),
+    activeProfileId: activeLensProfileId,
+    activeCaptureId: activeLensCaptureId,
+    isOpen: Boolean(activeProfile?.captures.some((capture) => activeOpenCaptureIds.has(capture.id))),
+    openCaptureIds: [...activeOpenCaptureIds]
   }
 }
 
@@ -270,6 +659,11 @@ function broadcastLensState(): void {
   const lensState = getLensState()
   mainWindow?.webContents.send('lens:updated', lensState)
   mainWindow?.webContents.send('selection:updated', lensState.config)
+  for (const lensWindow of lensWindows.values()) {
+    if (!lensWindow.isDestroyed()) {
+      lensWindow.webContents.send('lens:updated', lensState)
+    }
+  }
 }
 
 function getTimerState(): TimerState {
@@ -428,22 +822,33 @@ function createMainWindow(): void {
   })
 }
 
-function hideLens(): LensState {
-  if (lensWindow && !lensWindow.isDestroyed()) {
-    persistedState.lensWindowBounds = lensWindow.getBounds()
-    const windowToClose = lensWindow
-    lensWindow = null
-    windowToClose.destroy()
+function hideLens(options: { broadcast?: boolean } = {}): LensState {
+  const shouldBroadcast = options.broadcast ?? true
+  syncOpenLensWindowBounds()
+
+  for (const [captureId, lensWindow] of lensWindows) {
+    if (!lensWindow.isDestroyed()) {
+      if (!shouldBroadcast) {
+        mutedLensClosedCaptureIds.add(captureId)
+      }
+      lensWindows.delete(captureId)
+      lensWindow.destroy()
+    }
   }
 
   savePersistedState()
-  broadcastLensState()
+  if (shouldBroadcast) {
+    broadcastLensState()
+  }
   return getLensState()
 }
 
 function showLens(): LensState {
-  if (lensConfig) {
-    createLensWindow(lensConfig, persistedState.lensWindowBounds)
+  const activeProfile = getActiveLensProfile()
+  if (activeProfile) {
+    for (const capture of activeProfile.captures) {
+      createLensWindow(capture)
+    }
   }
 
   broadcastLensState()
@@ -451,7 +856,10 @@ function showLens(): LensState {
 }
 
 function toggleLens(): LensState {
-  if (lensWindow && !lensWindow.isDestroyed()) {
+  const activeProfile = getActiveLensProfile()
+  const openCaptureIds = new Set(getOpenLensCaptureIds())
+
+  if (activeProfile?.captures.some((capture) => openCaptureIds.has(capture.id))) {
     return hideLens()
   }
 
@@ -460,6 +868,30 @@ function toggleLens(): LensState {
 
 function closeLens(): void {
   hideLens()
+}
+
+function selectLensProfile(profileId: string): LensState {
+  if (!lensProfiles.some((profile) => profile.id === profileId)) {
+    return getLensState()
+  }
+
+  const shouldRestoreLens = getOpenLensCaptureIds().length > 0
+  hideLens({ broadcast: false })
+  activeLensProfileId = profileId
+  activeLensCaptureId = getActiveLensProfile()?.captures[0]?.id ?? null
+  const activeCapture = getActiveLensCapture()
+  currentLensSettings = activeCapture ? normalizeLensSettings(activeCapture.settings) : { ...defaultLensSettings }
+
+  if (shouldRestoreLens) {
+    const activeProfile = getActiveLensProfile()
+    for (const capture of activeProfile?.captures ?? []) {
+      createLensWindow(capture)
+    }
+  }
+
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
 }
 
 function hideTimer(): TimerState {
@@ -549,7 +981,7 @@ function refreshApplicationMenu(): void {
         },
         {
           label: '关于 MapleTool',
-          click: showAboutDialog
+          click: () => showMainTool('about')
         }
       ]
     }
@@ -564,6 +996,7 @@ function registerGlobalShortcuts(shouldBroadcast = true): void {
     lensToggle: false,
     timerToggle: false
   }
+  registeredLensProfileShortcuts = new Map()
 
   const shortcutHandlers: Record<HotkeyAction, () => void> = {
     lensToggle: toggleLens,
@@ -588,8 +1021,31 @@ function registerGlobalShortcuts(shouldBroadcast = true): void {
     }
   }
 
+  lensProfiles.slice(0, 9).forEach((profile, index) => {
+    const shortcut = lensProfileShortcut(index)
+    if (!shortcut) return
+
+    if (registeredShortcuts.has(shortcut)) {
+      registeredLensProfileShortcuts.set(profile.id, false)
+      console.warn(`Duplicate lens profile shortcut: ${shortcut}`)
+      return
+    }
+
+    const registered = globalShortcut.register(shortcut, () => {
+      selectLensProfile(profile.id)
+    })
+    registeredLensProfileShortcuts.set(profile.id, registered)
+
+    if (registered) {
+      registeredShortcuts.add(shortcut)
+    } else {
+      console.warn(`Failed to register lens profile shortcut: ${shortcut}`)
+    }
+  })
+
   refreshApplicationMenu()
   if (shouldBroadcast) broadcastHotkeyState()
+  if (shouldBroadcast) broadcastLensState()
 }
 
 function hasDuplicateHotkey(settings: HotkeySettings): boolean {
@@ -632,6 +1088,33 @@ function resetHotkey(action: HotkeyAction): HotkeyState {
   return updateHotkey(action, DEFAULT_HOTKEY_SETTINGS[action])
 }
 
+function updateLensProfileShortcutPrefix(prefix: string): HotkeyState {
+  const nextPrefix = normalizeLensProfileShortcutPrefix(prefix)
+  const previousPrefix = lensProfileShortcutPrefix
+
+  lensProfileShortcutPrefix = nextPrefix
+  registerGlobalShortcuts(false)
+
+  const failedProfileIndex = lensProfiles
+    .slice(0, 9)
+    .findIndex((profile) => registeredLensProfileShortcuts.get(profile.id) !== true)
+
+  if (failedProfileIndex >= 0) {
+    const failedShortcut = lensProfileShortcut(failedProfileIndex) ?? nextPrefix
+    lensProfileShortcutPrefix = previousPrefix
+    registerGlobalShortcuts(false)
+    const state = getHotkeyState(`角色快捷键 ${failedShortcut} 无法注册，可能已被系统或其他软件占用。`)
+    broadcastHotkeyState(state.error)
+    broadcastLensState()
+    return state
+  }
+
+  savePersistedState()
+  broadcastHotkeyState()
+  broadcastLensState()
+  return getHotkeyState()
+}
+
 function closeSelectorWindows(): void {
   for (const selectorWindow of selectorWindows) {
     if (!selectorWindow.isDestroyed()) {
@@ -646,11 +1129,13 @@ function createSelectorWindows(): void {
 
   for (const display of screen.getAllDisplays()) {
     const bounds = display.bounds
+    const shouldUseFullscreenSelector = process.platform === 'win32'
     const selectorWindow = new BrowserWindow({
       x: bounds.x,
       y: bounds.y,
       width: bounds.width,
       height: bounds.height,
+      fullscreen: shouldUseFullscreenSelector,
       frame: false,
       transparent: true,
       resizable: false,
@@ -658,7 +1143,7 @@ function createSelectorWindows(): void {
       hasShadow: false,
       skipTaskbar: true,
       alwaysOnTop: true,
-      fullscreenable: false,
+      fullscreenable: shouldUseFullscreenSelector,
       backgroundColor: '#00000000',
       webPreferences: {
         preload: preloadPath(),
@@ -670,6 +1155,10 @@ function createSelectorWindows(): void {
 
     selectorWindow.setAlwaysOnTop(true, 'screen-saver')
     selectorWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    if (shouldUseFullscreenSelector) {
+      selectorWindow.setBounds(bounds)
+      selectorWindow.setFullScreen(true)
+    }
 
     loadRenderer(selectorWindow, 'selector', {
       displayId: String(display.id),
@@ -684,22 +1173,31 @@ function createSelectorWindows(): void {
   }
 }
 
-function createLensWindow(config: LensConfig, restoredBounds?: Electron.Rectangle): void {
-  if (lensWindow && !lensWindow.isDestroyed()) {
-    lensWindow.close()
+function createLensWindow(config: LensCapture): void {
+  const existingWindow = lensWindows.get(config.id)
+  if (existingWindow && !existingWindow.isDestroyed()) {
+    applyLensWindowBehavior(existingWindow, config.settings)
+    existingWindow.showInactive()
+    existingWindow.moveTop()
+    existingWindow.webContents.send('lens:settings', config.settings)
+    broadcastLensState()
+    savePersistedState()
+    return
   }
 
   const displayBounds = config.display.bounds
   const size = clampLensSize(config.region, config.settings.zoom)
+  const activeProfile = getActiveLensProfile()
+  const captureIndex = Math.max(0, activeProfile?.captures.findIndex((capture) => capture.id === config.id) ?? 0)
   const windowBounds =
-    normalizeWindowBounds(restoredBounds) ?? {
+    normalizeWindowBounds(config.windowBounds) ?? {
       x: Math.round(displayBounds.x + displayBounds.width - size.width - 40),
-      y: Math.round(displayBounds.y + 48),
+      y: Math.round(displayBounds.y + 48 + captureIndex * 28),
       width: size.width,
       height: size.height
     }
 
-  lensWindow = new BrowserWindow({
+  const lensWindow = new BrowserWindow({
     x: windowBounds.x,
     y: windowBounds.y,
     width: windowBounds.width,
@@ -711,7 +1209,7 @@ function createLensWindow(config: LensConfig, restoredBounds?: Electron.Rectangl
     resizable: !config.settings.locked,
     hasShadow: false,
     movable: !config.settings.locked,
-    title: 'MapleTool Lens',
+    title: `MapleTool Lens - ${config.name}`,
     backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -724,21 +1222,30 @@ function createLensWindow(config: LensConfig, restoredBounds?: Electron.Rectangl
   })
 
   applyLensWindowBehavior(lensWindow, config.settings)
-  loadRenderer(lensWindow, 'lens')
+  loadRenderer(lensWindow, 'lens', { captureId: config.id })
+  lensWindows.set(config.id, lensWindow)
 
   const createdWindow = lensWindow
 
   createdWindow.on('close', () => {
     if (!createdWindow.isDestroyed()) {
-      persistedState.lensWindowBounds = createdWindow.getBounds()
+      const bounds = createdWindow.getBounds()
+      updateLensCapture(config.id, (capture) => ({
+        ...capture,
+        windowBounds: {
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height
+        }
+      }))
     }
   })
 
   createdWindow.on('closed', () => {
-    if (lensWindow === createdWindow) {
-      lensWindow = null
-    }
-    if (!isQuitting) {
+    const shouldMute = mutedLensClosedCaptureIds.delete(config.id)
+    lensWindows.delete(config.id)
+    if (!isQuitting && !shouldMute) {
       broadcastLensState()
       savePersistedState()
     }
@@ -854,6 +1361,8 @@ ipcMain.handle('selection:start', () => {
 })
 
 ipcMain.on('selection:complete', (_event, payload: SelectionPayload) => {
+  ensureLensProfiles()
+
   const region = {
     x: Math.round(payload.region.x),
     y: Math.round(payload.region.y),
@@ -866,14 +1375,29 @@ ipcMain.on('selection:complete', (_event, payload: SelectionPayload) => {
     return
   }
 
-  lensConfig = {
+  const activeProfile = getActiveLensProfile()
+  if (!activeProfile) {
+    closeSelectorWindows()
+    return
+  }
+
+  const capture: LensCapture = {
+    id: createId('capture'),
+    name: `技能 ${activeProfile.captures.length + 1}`,
     display: payload.display,
     region,
     settings: currentLensSettings
   }
 
+  lensProfiles = lensProfiles.map((profile) =>
+    profile.id === activeProfile.id ? { ...profile, captures: [...profile.captures, capture] } : profile
+  )
+  activeLensProfileId = activeProfile.id
+  activeLensCaptureId = capture.id
+  currentLensSettings = normalizeLensSettings(capture.settings)
+
   closeSelectorWindows()
-  createLensWindow(lensConfig)
+  createLensWindow(capture)
   broadcastLensState()
   savePersistedState()
 })
@@ -886,30 +1410,38 @@ ipcMain.handle('screen:get-source', (_event, displayId: string) => {
   return getScreenSource(displayId)
 })
 
-ipcMain.handle('lens:get-config', () => {
-  return lensConfig
+ipcMain.handle('lens:get-config', (_event, captureId?: string) => {
+  if (typeof captureId === 'string' && captureId.trim()) {
+    return findLensCapture(captureId)?.capture ?? null
+  }
+
+  return getActiveLensCapture()
 })
 
 ipcMain.handle('lens:get-state', () => {
   return getLensState()
 })
 
-ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>) => {
+ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>, captureId?: string) => {
   currentLensSettings = mergeLensSettings(settings)
+  const targetCaptureId = typeof captureId === 'string' && captureId.trim() ? captureId : activeLensCaptureId
 
-  if (!lensConfig) {
+  if (!targetCaptureId) {
     savePersistedState()
+    broadcastLensState()
     return
   }
 
-  lensConfig = {
-    ...lensConfig,
+  const nextCapture = updateLensCapture(targetCaptureId, (capture) => ({
+    ...capture,
     settings: currentLensSettings
-  }
+  }))
 
-  if (lensWindow && !lensWindow.isDestroyed() && settings.zoom !== undefined) {
+  const lensWindow = lensWindows.get(targetCaptureId)
+
+  if (nextCapture && lensWindow && !lensWindow.isDestroyed() && settings.zoom !== undefined) {
     const bounds = lensWindow.getBounds()
-    const nextSize = clampLensSize(lensConfig.region, lensConfig.settings.zoom)
+    const nextSize = clampLensSize(nextCapture.region, nextCapture.settings.zoom)
     lensWindow.setBounds({
       ...bounds,
       width: nextSize.width,
@@ -922,10 +1454,10 @@ ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>) => 
     !lensWindow.isDestroyed() &&
     (settings.opacity !== undefined || settings.locked !== undefined)
   ) {
-    applyLensWindowBehavior(lensWindow, lensConfig.settings)
+    applyLensWindowBehavior(lensWindow, currentLensSettings)
   }
 
-  lensWindow?.webContents.send('lens:settings', lensConfig.settings)
+  lensWindow?.webContents.send('lens:settings', currentLensSettings)
   broadcastLensState()
   savePersistedState()
 })
@@ -936,6 +1468,112 @@ ipcMain.on('lens:close', () => {
 
 ipcMain.handle('lens:toggle', () => {
   return toggleLens()
+})
+
+ipcMain.handle('lens:create-profile', (_event, name: string) => {
+  const profileName = typeof name === 'string' && name.trim() ? name.trim() : `角色 ${lensProfiles.length + 1}`
+  const profile: LensProfile = {
+    id: createId('profile'),
+    name: profileName,
+    captures: []
+  }
+
+  hideLens({ broadcast: false })
+  lensProfiles = [...lensProfiles, profile]
+  activeLensProfileId = profile.id
+  activeLensCaptureId = null
+  currentLensSettings = { ...defaultLensSettings }
+  registerGlobalShortcuts(false)
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
+})
+
+ipcMain.handle('lens:rename-profile', (_event, profileId: string, name: string) => {
+  const nextName = typeof name === 'string' ? name.trim() : ''
+  if (!nextName) return getLensState()
+
+  lensProfiles = lensProfiles.map((profile) => (profile.id === profileId ? { ...profile, name: nextName } : profile))
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
+})
+
+ipcMain.handle('lens:select-profile', (_event, profileId: string) => {
+  return selectLensProfile(profileId)
+})
+
+ipcMain.handle('lens:delete-profile', (_event, profileId: string) => {
+  if (lensProfiles.length <= 1) return getLensState()
+
+  for (const capture of lensProfiles.find((profile) => profile.id === profileId)?.captures ?? []) {
+    const lensWindow = lensWindows.get(capture.id)
+    if (lensWindow && !lensWindow.isDestroyed()) {
+      lensWindows.delete(capture.id)
+      lensWindow.destroy()
+    }
+  }
+
+  lensProfiles = lensProfiles.filter((profile) => profile.id !== profileId)
+  if (activeLensProfileId === profileId) {
+    activeLensProfileId = lensProfiles[0]?.id ?? createDefaultLensProfile().id
+    activeLensCaptureId = getActiveLensProfile()?.captures[0]?.id ?? null
+  }
+
+  ensureLensProfiles()
+  registerGlobalShortcuts(false)
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
+})
+
+ipcMain.handle('lens:select-capture', (_event, captureId: string) => {
+  const result = findLensCapture(captureId)
+  if (!result) return getLensState()
+
+  activeLensProfileId = result.profile.id
+  activeLensCaptureId = result.capture.id
+  currentLensSettings = normalizeLensSettings(result.capture.settings)
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
+})
+
+ipcMain.handle('lens:rename-capture', (_event, captureId: string, name: string) => {
+  const nextName = typeof name === 'string' ? name.trim() : ''
+  if (!nextName) return getLensState()
+
+  updateLensCapture(captureId, (capture) => ({ ...capture, name: nextName }))
+  const lensWindow = lensWindows.get(captureId)
+  if (lensWindow && !lensWindow.isDestroyed()) {
+    lensWindow.setTitle(`MapleTool Lens - ${nextName}`)
+  }
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
+})
+
+ipcMain.handle('lens:delete-capture', (_event, captureId: string) => {
+  const lensWindow = lensWindows.get(captureId)
+  if (lensWindow && !lensWindow.isDestroyed()) {
+    lensWindows.delete(captureId)
+    lensWindow.destroy()
+  }
+
+  lensProfiles = lensProfiles.map((profile) => ({
+    ...profile,
+    captures: profile.captures.filter((capture) => capture.id !== captureId)
+  }))
+
+  if (activeLensCaptureId === captureId) {
+    activeLensCaptureId = getActiveLensProfile()?.captures[0]?.id ?? null
+    const activeCapture = getActiveLensCapture()
+    currentLensSettings = activeCapture ? normalizeLensSettings(activeCapture.settings) : { ...defaultLensSettings }
+  }
+
+  savePersistedState()
+  broadcastLensState()
+  return getLensState()
 })
 
 ipcMain.handle('timer:get-settings', () => {
@@ -1046,14 +1684,30 @@ ipcMain.handle('hotkeys:reset', (_event, action: HotkeyAction) => {
   return resetHotkey(action)
 })
 
+ipcMain.handle('hotkeys:update-profile-prefix', (_event, prefix: string) => {
+  return updateLensProfileShortcutPrefix(prefix)
+})
+
+ipcMain.handle('app:get-info', () => {
+  return getAppInfo()
+})
+
+ipcMain.handle('app:check-update', () => {
+  return checkForUpdates()
+})
+
+ipcMain.handle('app:open-release-page', (_event, url?: string) => {
+  return shell.openExternal(safeReleaseUrl(url))
+})
+
 app.whenReady().then(() => {
   restorePersistedState()
   refreshApplicationMenu()
   createMainWindow()
   registerGlobalShortcuts()
 
-  if (persistedState.lensOpen && lensConfig) {
-    createLensWindow(lensConfig, persistedState.lensWindowBounds)
+  if (persistedState.lensOpen) {
+    showLens()
   }
 
   if (persistedState.timerOpen) {

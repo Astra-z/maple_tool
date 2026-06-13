@@ -1,14 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AppInfo,
   HotkeyAction,
   HotkeyState,
-  LensConfig,
+  LensCapture,
   LensSettings,
   LensState,
   ScreenSource,
   SelectionPayload,
   TimerSettings,
-  TimerState
+  TimerState,
+  UpdateCheckResult
 } from '../shared/types'
 
 const api = {
@@ -22,20 +24,41 @@ const api = {
   getScreenSource: (displayId: string): Promise<ScreenSource> => {
     return ipcRenderer.invoke('screen:get-source', displayId)
   },
-  getLensConfig: (): Promise<LensConfig | null> => {
-    return ipcRenderer.invoke('lens:get-config')
+  getLensConfig: (captureId?: string): Promise<LensCapture | null> => {
+    return ipcRenderer.invoke('lens:get-config', captureId)
   },
   getLensState: (): Promise<LensState> => {
     return ipcRenderer.invoke('lens:get-state')
   },
-  updateLensSettings: (settings: Partial<LensSettings>): void => {
-    ipcRenderer.send('lens:update-settings', settings)
+  updateLensSettings: (settings: Partial<LensSettings>, captureId?: string): void => {
+    ipcRenderer.send('lens:update-settings', settings, captureId)
   },
   closeLens: (): void => {
     ipcRenderer.send('lens:close')
   },
   toggleLens: (): Promise<LensState> => {
     return ipcRenderer.invoke('lens:toggle')
+  },
+  createLensProfile: (name: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:create-profile', name)
+  },
+  renameLensProfile: (profileId: string, name: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:rename-profile', profileId, name)
+  },
+  selectLensProfile: (profileId: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:select-profile', profileId)
+  },
+  deleteLensProfile: (profileId: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:delete-profile', profileId)
+  },
+  selectLensCapture: (captureId: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:select-capture', captureId)
+  },
+  renameLensCapture: (captureId: string, name: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:rename-capture', captureId, name)
+  },
+  deleteLensCapture: (captureId: string): Promise<LensState> => {
+    return ipcRenderer.invoke('lens:delete-capture', captureId)
   },
   getTimerState: (): Promise<TimerState> => {
     return ipcRenderer.invoke('timer:get-settings')
@@ -76,8 +99,20 @@ const api = {
   resetHotkey: (action: HotkeyAction): Promise<HotkeyState> => {
     return ipcRenderer.invoke('hotkeys:reset', action)
   },
-  onSelectionUpdated: (callback: (config: LensConfig | null) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, config: LensConfig | null): void => callback(config)
+  updateLensProfileHotkeyPrefix: (prefix: string): Promise<HotkeyState> => {
+    return ipcRenderer.invoke('hotkeys:update-profile-prefix', prefix)
+  },
+  getAppInfo: (): Promise<AppInfo> => {
+    return ipcRenderer.invoke('app:get-info')
+  },
+  checkForUpdates: (): Promise<UpdateCheckResult> => {
+    return ipcRenderer.invoke('app:check-update')
+  },
+  openReleasePage: (url?: string): Promise<void> => {
+    return ipcRenderer.invoke('app:open-release-page', url)
+  },
+  onSelectionUpdated: (callback: (config: LensCapture | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, config: LensCapture | null): void => callback(config)
     ipcRenderer.on('selection:updated', handler)
     return () => ipcRenderer.removeListener('selection:updated', handler)
   },
