@@ -1,6 +1,6 @@
 {
   "name": "maple_tool",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "面向 GMS 国际服冒险岛玩家的桌面小工具。",
   "main": "out/main/index.js",
   "author": "Astra-z",
@@ -33,16 +33,19 @@
     "appId": "com.astraz.mapletool",
     "productName": "MapleTool",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "out/**",
       "package.json"
     ],
     "mac": {
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "icon": "build/icon.icns"
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",

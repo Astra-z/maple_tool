@@ -43,6 +43,9 @@ import './styles.css'
 
 type MainTool = 'lens' | 'timer' | 'hotkeys' | 'about'
 
+const LENS_RENDER_FPS = 12
+const LENS_RENDER_INTERVAL_MS = 1000 / LENS_RENDER_FPS
+
 const defaultRendererSettings: LensSettings = {
   zoom: 1,
   opacity: 0.94,
@@ -185,9 +188,16 @@ function normalizeHotkeyState(state: HotkeyState): HotkeyState {
   }
 }
 
+function getPrimaryModifierLabel(): string {
+  const userAgentPlatform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+    ?.platform
+  const platform = userAgentPlatform ?? navigator.platform
+  return /mac/i.test(platform) ? 'Command' : 'Ctrl'
+}
+
 function formatShortcut(shortcut: string): string {
   return shortcut
-    .replaceAll('CommandOrControl', 'Ctrl / Command')
+    .replaceAll('CommandOrControl', getPrimaryModifierLabel())
     .replaceAll('+', ' + ')
 }
 
@@ -728,25 +738,10 @@ function MainPanel(): React.ReactElement {
                 <div className="quality-note">
                   <FrameCorners size={18} weight="bold" />
                   <div>
-                    <strong>高清缩放</strong>
-                    <span>使用高质量平滑缩放，优先保证低延迟和清晰度。</span>
+                    <strong>窗口尺寸</strong>
+                    <span>直接拖拽放大镜边缘调整大小。</span>
                   </div>
                 </div>
-
-                <label className="slider-field">
-                  <span>放大倍率</span>
-                  <b>{settings.zoom.toFixed(1)}x</b>
-                  <input
-                    disabled={!config}
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="0.1"
-                    value={settings.zoom}
-                    style={rangeFill(settings.zoom, 1, 5)}
-                    onChange={(event) => updateSetting({ zoom: Number(event.currentTarget.value) })}
-                  />
-                </label>
 
                 <label className="slider-field">
                   <span>放大内容透明度</span>
@@ -1110,7 +1105,7 @@ function HotkeysPanel({
       const shortcut = eventToShortcut(event)
 
       if (!shortcut) {
-        setCaptureError('请按下包含 Ctrl / Command、Alt 或 Shift 的组合键。')
+        setCaptureError(`请按下包含 ${getPrimaryModifierLabel()}、Alt 或 Shift 的组合键。`)
         return
       }
 
@@ -1389,7 +1384,7 @@ function LensWindow(): React.ReactElement {
   const captureId = useMemo(getCaptureIdFromQuery, [])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const animationRef = useRef<number | null>(null)
+  const drawTimerRef = useRef<number | null>(null)
   const [config, setConfig] = useState<LensCapture | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -1428,7 +1423,7 @@ function LensWindow(): React.ReactElement {
             mandatory: {
               chromeMediaSource: 'desktop',
               chromeMediaSourceId: source.id,
-              maxFrameRate: 30
+              maxFrameRate: LENS_RENDER_FPS
             }
           }
         } as unknown as MediaStreamConstraints
@@ -1451,7 +1446,7 @@ function LensWindow(): React.ReactElement {
 
     return () => {
       cancelled = true
-      if (animationRef.current) cancelAnimationFrame(animationRef.current)
+      if (drawTimerRef.current) window.clearTimeout(drawTimerRef.current)
       stream?.getTracks().forEach((track) => track.stop())
       videoRef.current = null
     }
@@ -1483,22 +1478,25 @@ function LensWindow(): React.ReactElement {
           const sourceY = Math.round(config.region.y * scaleY)
           const sourceWidth = Math.round(config.region.width * scaleX)
           const sourceHeight = Math.round(config.region.height * scaleY)
+          const isScaled = canvas.width !== sourceWidth || canvas.height !== sourceHeight
 
           context.clearRect(0, 0, canvas.width, canvas.height)
-          context.imageSmoothingEnabled = true
-          context.imageSmoothingQuality = 'high'
+          context.imageSmoothingEnabled = isScaled
+          if (isScaled) {
+            context.imageSmoothingQuality = 'high'
+          }
           context.globalAlpha = config.settings.opacity
           context.drawImage(video, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height)
           context.globalAlpha = 1
         }
       }
 
-      animationRef.current = requestAnimationFrame(draw)
+      drawTimerRef.current = window.setTimeout(draw, LENS_RENDER_INTERVAL_MS)
     }
 
-    animationRef.current = requestAnimationFrame(draw)
+    draw()
     return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current)
+      if (drawTimerRef.current) window.clearTimeout(drawTimerRef.current)
     }
   }, [config])
 

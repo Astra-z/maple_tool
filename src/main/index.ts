@@ -520,7 +520,10 @@ function getTimerAudioDataUrl(): string | null {
   }
 }
 
-function normalizeWindowBounds(bounds?: Partial<Electron.Rectangle>): Electron.Rectangle | undefined {
+function normalizeWindowBounds(
+  bounds?: Partial<Electron.Rectangle>,
+  minimum: { width: number; height: number } = { width: 80, height: 60 }
+): Electron.Rectangle | undefined {
   if (!bounds) return undefined
 
   const width = Math.round(Number(bounds.width))
@@ -528,7 +531,7 @@ function normalizeWindowBounds(bounds?: Partial<Electron.Rectangle>): Electron.R
   const x = Math.round(Number(bounds.x))
   const y = Math.round(Number(bounds.y))
 
-  if (![x, y, width, height].every(Number.isFinite) || width < 80 || height < 60) {
+  if (![x, y, width, height].every(Number.isFinite) || width < minimum.width || height < minimum.height) {
     return undefined
   }
 
@@ -782,9 +785,22 @@ function displayToInfo(display: Electron.Display): DisplayInfo {
 }
 
 function clampLensSize(region: Rect, zoom: number): { width: number; height: number } {
+  const width = Math.round(Math.min(Math.max(region.width * zoom, 20), 860))
+  const height = Math.round(Math.min(Math.max(region.height * zoom, 20), 520))
+  return { width, height }
+}
+
+function clampLegacyLensSize(region: Rect, zoom: number): { width: number; height: number } {
   const width = Math.round(Math.min(Math.max(region.width * zoom, 120), 860))
   const height = Math.round(Math.min(Math.max(region.height * zoom, 72), 520))
   return { width, height }
+}
+
+function isLegacyGeneratedLensSize(capture: LensCapture, bounds: Electron.Rectangle): boolean {
+  const legacySize = clampLegacyLensSize(capture.region, capture.settings.zoom)
+  const matchesLegacySize = Math.abs(bounds.width - legacySize.width) <= 2 && Math.abs(bounds.height - legacySize.height) <= 2
+  const usedLegacyMinimum = capture.region.width < 120 || capture.region.height < 72
+  return matchesLegacySize && (capture.settings.zoom !== defaultLensSettings.zoom || usedLegacyMinimum)
 }
 
 function createMainWindow(): void {
@@ -1188,24 +1204,33 @@ function createLensWindow(config: LensCapture): void {
   }
 
   const displayBounds = config.display.bounds
-  const size = clampLensSize(config.region, config.settings.zoom)
+  const size = clampLensSize(config.region, defaultLensSettings.zoom)
   const activeProfile = getActiveLensProfile()
   const captureIndex = Math.max(0, activeProfile?.captures.findIndex((capture) => capture.id === config.id) ?? 0)
+  const restoredBounds = normalizeWindowBounds(config.windowBounds, { width: 20, height: 20 })
+  const shouldResetLegacySize = restoredBounds ? isLegacyGeneratedLensSize(config, restoredBounds) : false
   const windowBounds =
-    normalizeWindowBounds(config.windowBounds) ?? {
-      x: Math.round(displayBounds.x + displayBounds.width - size.width - 40),
-      y: Math.round(displayBounds.y + 48 + captureIndex * 28),
-      width: size.width,
-      height: size.height
-    }
+    restoredBounds
+      ? {
+          x: restoredBounds.x,
+          y: restoredBounds.y,
+          width: shouldResetLegacySize ? size.width : restoredBounds.width,
+          height: shouldResetLegacySize ? size.height : restoredBounds.height
+        }
+      : {
+          x: Math.round(displayBounds.x + displayBounds.width - size.width - 40),
+          y: Math.round(displayBounds.y + 48 + captureIndex * 28),
+          width: size.width,
+          height: size.height
+        }
 
   const lensWindow = new BrowserWindow({
     x: windowBounds.x,
     y: windowBounds.y,
     width: windowBounds.width,
     height: windowBounds.height,
-    minWidth: 100,
-    minHeight: 64,
+    minWidth: 20,
+    minHeight: 20,
     frame: false,
     transparent: true,
     resizable: !config.settings.locked,
@@ -1391,7 +1416,10 @@ ipcMain.on('selection:complete', (_event, payload: SelectionPayload) => {
     name: `技能 ${activeProfile.captures.length + 1}`,
     display: payload.display,
     region,
-    settings: currentLensSettings
+    settings: {
+      ...currentLensSettings,
+      zoom: defaultLensSettings.zoom
+    }
   }
 
   lensProfiles = lensProfiles.map((profile) =>
@@ -1437,22 +1465,12 @@ ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>, cap
     return
   }
 
-  const nextCapture = updateLensCapture(targetCaptureId, (capture) => ({
+  updateLensCapture(targetCaptureId, (capture) => ({
     ...capture,
     settings: currentLensSettings
   }))
 
   const lensWindow = lensWindows.get(targetCaptureId)
-
-  if (nextCapture && lensWindow && !lensWindow.isDestroyed() && settings.zoom !== undefined) {
-    const bounds = lensWindow.getBounds()
-    const nextSize = clampLensSize(nextCapture.region, nextCapture.settings.zoom)
-    lensWindow.setBounds({
-      ...bounds,
-      width: nextSize.width,
-      height: nextSize.height
-    })
-  }
 
   if (
     lensWindow &&
