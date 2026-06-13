@@ -1097,7 +1097,6 @@ function resetHotkey(action: HotkeyAction): HotkeyState {
 
 function updateLensProfileShortcutPrefix(prefix: string): HotkeyState {
   const nextPrefix = normalizeLensProfileShortcutPrefix(prefix)
-  const previousPrefix = lensProfileShortcutPrefix
 
   lensProfileShortcutPrefix = nextPrefix
   registerGlobalShortcuts(false)
@@ -1106,20 +1105,15 @@ function updateLensProfileShortcutPrefix(prefix: string): HotkeyState {
     .slice(0, 9)
     .findIndex((profile) => registeredLensProfileShortcuts.get(profile.id) !== true)
 
-  if (failedProfileIndex >= 0) {
-    const failedShortcut = lensProfileShortcut(failedProfileIndex) ?? nextPrefix
-    lensProfileShortcutPrefix = previousPrefix
-    registerGlobalShortcuts(false)
-    const state = getHotkeyState(`角色快捷键 ${failedShortcut} 无法注册，可能已被系统或其他软件占用。`)
-    broadcastHotkeyState(state.error)
-    broadcastLensState()
-    return state
-  }
-
   savePersistedState()
-  broadcastHotkeyState()
+  const error =
+    failedProfileIndex >= 0
+      ? `已保存，但角色快捷键 ${lensProfileShortcut(failedProfileIndex) ?? nextPrefix} 无法注册，可能已被系统或其他软件占用。`
+      : null
+
+  broadcastHotkeyState(error)
   broadcastLensState()
-  return getHotkeyState()
+  return getHotkeyState(error)
 }
 
 function closeSelectorWindows(): void {

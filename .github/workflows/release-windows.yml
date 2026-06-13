@@ -1,0 +1,103 @@
+name: Release Windows Portable
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build, for example v0.1.4'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-portable:
+    name: Build and upload Windows portable
+    runs-on: windows-latest
+    env:
+      TAG_NAME: ${{ inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build renderer and main process
+        run: pnpm build
+
+      - name: Build Windows portable
+        run: pnpm exec electron-builder --win portable --x64 --publish never
+
+      - name: Resolve artifact metadata
+        id: artifact
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json | ConvertFrom-Json
+          $file = "release/MapleTool-$($package.version)-x64-portable.exe"
+          if (!(Test-Path $file)) {
+            throw "Portable artifact not found: $file"
+          }
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          "version=$($package.version)" >> $env:GITHUB_OUTPUT
+          "file=$file" >> $env:GITHUB_OUTPUT
+          "name=$(Split-Path $file -Leaf)" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Create or update release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ env.TAG_NAME }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 }}
+        run: |
+          $notes = @"
+          MapleTool $env:RELEASE_TAG
+
+          Artifact:
+          - $env:ARTIFACT_NAME: Windows x64 portable executable.
+
+          SHA256:
+          - portable: $env:ARTIFACT_SHA256
+
+          Notes:
+          - Windows build is not code-signed, so SmartScreen may warn on first launch.
+          - Screen capture permissions are required for the cooldown lens feature.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          Set-Content -Path $notesPath -Value $notes -Encoding UTF8
+
+          gh release view $env:RELEASE_TAG 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --title "MapleTool $env:RELEASE_TAG" --notes-file $notesPath
+          } else {
+            gh release edit $env:RELEASE_TAG --title "MapleTool $env:RELEASE_TAG" --notes-file $notesPath
+          }
+
+      - name: Upload portable asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ env.TAG_NAME }}
+          ARTIFACT_FILE: ${{ steps.artifact.outputs.file }}
+        run: gh release upload $env:RELEASE_TAG $env:ARTIFACT_FILE --clobber

@@ -234,6 +234,18 @@ function eventToShortcut(event: KeyboardEvent): string | null {
   return parts.join('+')
 }
 
+function eventToShortcutPreview(event: KeyboardEvent): string | null {
+  const key = keyToAcceleratorKey(event)
+  const parts: string[] = []
+
+  if (event.ctrlKey || event.metaKey) parts.push('CommandOrControl')
+  if (event.altKey) parts.push('Alt')
+  if (event.shiftKey) parts.push('Shift')
+  if (key && !['Control', 'Meta', 'Shift', 'Alt'].includes(event.key)) parts.push(key)
+
+  return parts.length > 0 ? parts.join('+') : null
+}
+
 function shortcutToProfilePrefix(shortcut: string): string | null {
   const parts = shortcut
     .split('+')
@@ -485,6 +497,7 @@ function MainPanel(): React.ReactElement {
   const updateLensProfileHotkeyPrefix = async (prefix: string): Promise<void> => {
     const nextState = await window.maple.updateLensProfileHotkeyPrefix(prefix)
     setHotkeyState(normalizeHotkeyState(nextState))
+    applyLensState(await window.maple.getLensState())
   }
 
   const checkForUpdates = async (): Promise<void> => {
@@ -1075,6 +1088,7 @@ function HotkeysPanel({
 }): React.ReactElement {
   const [capturingAction, setCapturingAction] = useState<HotkeyAction | null>(null)
   const [capturingProfilePrefix, setCapturingProfilePrefix] = useState(false)
+  const [shortcutPreview, setShortcutPreview] = useState('')
   const [captureError, setCaptureError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -1087,10 +1101,12 @@ function HotkeysPanel({
       if (event.key === 'Escape') {
         setCapturingAction(null)
         setCapturingProfilePrefix(false)
+        setShortcutPreview('')
         setCaptureError(null)
         return
       }
 
+      setShortcutPreview(eventToShortcutPreview(event) ?? '')
       const shortcut = eventToShortcut(event)
 
       if (!shortcut) {
@@ -1108,6 +1124,7 @@ function HotkeysPanel({
 
         setCaptureError(null)
         setCapturingProfilePrefix(false)
+        setShortcutPreview('')
         void updateLensProfileHotkeyPrefix(prefix)
         return
       }
@@ -1116,6 +1133,7 @@ function HotkeysPanel({
 
       setCaptureError(null)
       setCapturingAction(null)
+      setShortcutPreview('')
       void updateHotkey(capturingAction, shortcut)
     }
 
@@ -1174,9 +1192,15 @@ function HotkeysPanel({
                   onClick={() => {
                     setCapturingProfilePrefix(false)
                     setCapturingAction(row.action)
+                    setShortcutPreview('')
+                    setCaptureError(null)
                   }}
                 >
-                  {isCapturing ? '按下组合键' : formatShortcut(hotkeyState.settings[row.action])}
+                  {isCapturing
+                    ? shortcutPreview
+                      ? formatShortcut(shortcutPreview)
+                      : '按下组合键'
+                    : formatShortcut(hotkeyState.settings[row.action])}
                 </button>
                 <button className="secondary-button compact-button" type="button" onClick={() => resetHotkey(row.action)}>
                   <span>恢复默认</span>
@@ -1198,9 +1222,15 @@ function HotkeysPanel({
               onClick={() => {
                 setCapturingAction(null)
                 setCapturingProfilePrefix(true)
+                setShortcutPreview('')
+                setCaptureError(null)
               }}
             >
-              {capturingProfilePrefix ? '按前缀 + 1' : formatShortcut(hotkeyState.lensProfilePrefix)}
+              {capturingProfilePrefix
+                ? shortcutPreview
+                  ? formatShortcut(shortcutPreview)
+                  : '按前缀 + 1'
+                : formatShortcut(hotkeyState.lensProfilePrefix)}
             </button>
           </div>
           {lensProfiles.map((profile) => (
