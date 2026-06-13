@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, screen, shell } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
@@ -33,6 +33,7 @@ let mainWindow: BrowserWindow | null = null
 let lensWindows = new Map<string, BrowserWindow>()
 let timerWindow: BrowserWindow | null = null
 let selectorWindows: BrowserWindow[] = []
+let tray: Tray | null = null
 let mutedLensClosedCaptureIds = new Set<string>()
 let isQuitting = false
 
@@ -763,6 +764,86 @@ function preloadPath(): string {
   return join(__dirname, '../preload/index.mjs')
 }
 
+function trayIconPath(): string {
+  if (app.isPackaged) {
+    const packagedIconPath = join(process.resourcesPath, 'icon.ico')
+    if (existsSync(packagedIconPath)) return packagedIconPath
+  }
+
+  const devIconPath = join(process.cwd(), 'build/icon.ico')
+  if (existsSync(devIconPath)) return devIconPath
+
+  return join(process.cwd(), 'build/icon.png')
+}
+
+function restoreMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow()
+  }
+
+  if (mainWindow?.isMinimized()) {
+    mainWindow.restore()
+  }
+
+  mainWindow?.show()
+  mainWindow?.focus()
+}
+
+function minimizeMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  persistedState.mainWindowBounds = mainWindow.getBounds()
+
+  if (process.platform === 'win32') {
+    mainWindow.hide()
+    return
+  }
+
+  mainWindow.minimize()
+}
+
+function quitFromTray(): void {
+  isQuitting = true
+  app.quit()
+}
+
+function createTray(): void {
+  if (process.platform !== 'win32' || tray) return
+
+  const trayImage = nativeImage.createFromPath(trayIconPath())
+  if (trayImage.isEmpty()) {
+    console.warn('Unable to create MapleTool tray icon.')
+    return
+  }
+
+  tray = new Tray(trayImage)
+  tray.setToolTip('MapleTool')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: '显示主窗口',
+        click: restoreMainWindow
+      },
+      { type: 'separator' },
+      {
+        label: '打开 / 关闭放大镜',
+        click: toggleLens
+      },
+      {
+        label: '打开 / 关闭倒计时浮层',
+        click: toggleTimer
+      },
+      { type: 'separator' },
+      {
+        label: '退出 MapleTool',
+        click: quitFromTray
+      }
+    ])
+  )
+  tray.on('click', restoreMainWindow)
+  tray.on('double-click', restoreMainWindow)
+}
+
 function loadRenderer(window: BrowserWindow, view: string, query: Record<string, string> = {}): void {
   const params = new URLSearchParams({ view, ...query })
 
@@ -824,6 +905,12 @@ function createMainWindow(): void {
   })
 
   loadRenderer(mainWindow, 'main')
+
+  mainWindow.on('minimize', () => {
+    if (process.platform !== 'win32' || isQuitting) return
+
+    minimizeMainWindow()
+  })
 
   mainWindow.on('close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -987,6 +1074,11 @@ function refreshApplicationMenu(): void {
           label: '打开 / 关闭倒计时浮层',
           accelerator: hotkeySettings.timerToggle,
           click: toggleTimer
+        },
+        {
+          label: process.platform === 'win32' ? '最小化到托盘' : '最小化主窗口',
+          accelerator: process.platform === 'darwin' ? 'Command+M' : 'Ctrl+M',
+          click: minimizeMainWindow
         },
         { type: 'separator' },
         {
@@ -1726,6 +1818,7 @@ ipcMain.handle('app:open-release-page', (_event, url?: string) => {
 app.whenReady().then(() => {
   restorePersistedState()
   refreshApplicationMenu()
+  createTray()
   createMainWindow()
   registerGlobalShortcuts()
 
