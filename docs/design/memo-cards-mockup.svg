@@ -1,0 +1,243 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+  <title id="title">MapleTool large memo cards with modal creation mockup</title>
+  <desc id="desc">A MapleTool memo dashboard with large two-column reminder cards and a modal dialog for creating a new card.</desc>
+  <defs>
+    <linearGradient id="appBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8f2f4"/>
+      <stop offset="0.48" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef4fa"/>
+    </linearGradient>
+    <linearGradient id="accentButton" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12b981"/>
+      <stop offset="1" stop-color="#0b996a"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#293748" flood-opacity="0.11"/>
+    </filter>
+    <filter id="modalShadow" x="-24%" y="-24%" width="148%" height="148%">
+      <feDropShadow dx="0" dy="28" stdDeviation="24" flood-color="#1f2a37" flood-opacity="0.20"/>
+    </filter>
+    <style>
+      .bg { fill: url(#appBg); }
+      .sidebar { fill: rgba(255, 255, 255, 0.68); stroke: rgba(45, 63, 84, 0.13); }
+      .panel { fill: rgba(255, 255, 255, 0.90); stroke: rgba(45, 63, 84, 0.13); filter: url(#softShadow); }
+      .panel-soft { fill: rgba(244, 248, 251, 0.88); stroke: rgba(45, 63, 84, 0.13); }
+      .card { fill: rgba(255, 255, 255, 0.86); stroke: rgba(45, 63, 84, 0.13); filter: url(#softShadow); }
+      .card-done { fill: rgba(18, 185, 129, 0.08); stroke: rgba(18, 185, 129, 0.24); filter: url(#softShadow); }
+      .modal { fill: rgba(255, 255, 255, 0.96); stroke: rgba(45, 63, 84, 0.14); filter: url(#modalShadow); }
+      .backdrop { fill: rgba(31, 42, 55, 0.18); }
+      .accent { fill: #12b981; }
+      .accent-strong { fill: #0b996a; }
+      .muted { fill: #66758a; }
+      .dim { fill: #8a97a9; }
+      .text { fill: #1f2a37; }
+      .danger { fill: #d94444; }
+      .blue { fill: #4977d2; }
+      .white { fill: #ffffff; }
+      .nav-active { fill: rgba(18, 185, 129, 0.13); stroke: rgba(18, 185, 129, 0.28); }
+      .button { fill: url(#accentButton); stroke: rgba(18, 185, 129, 0.48); }
+      .secondary { fill: rgba(255, 255, 255, 0.78); stroke: rgba(45, 63, 84, 0.20); }
+      .input { fill: rgba(255, 255, 255, 0.82); stroke: rgba(45, 63, 84, 0.14); }
+      .chip { fill: rgba(18, 185, 129, 0.10); stroke: rgba(18, 185, 129, 0.18); }
+      .font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; }
+      .h1 { font-size: 34px; font-weight: 800; letter-spacing: 0; }
+      .h2 { font-size: 16px; font-weight: 800; letter-spacing: 0; }
+      .body { font-size: 15px; font-weight: 500; letter-spacing: 0; }
+      .small { font-size: 14px; font-weight: 650; letter-spacing: 0; }
+      .tiny { font-size: 12px; font-weight: 720; letter-spacing: 0; }
+      .nav { font-size: 14px; font-weight: 760; letter-spacing: 0; }
+      .title { font-size: 22px; font-weight: 830; letter-spacing: 0; }
+      .count { font-size: 38px; font-weight: 850; letter-spacing: 0; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1440" height="960"/>
+
+  <rect class="sidebar" x="0.5" y="0.5" width="235" height="959"/>
+  <rect class="white" x="28" y="28" width="42" height="42" rx="14" stroke="rgba(18,185,129,0.30)"/>
+  <circle class="accent" cx="49" cy="49" r="10"/>
+  <circle class="white" cx="49" cy="49" r="4"/>
+  <text class="font text" x="84" y="45" font-size="17" font-weight="800">MapleTool</text>
+  <text class="font dim" x="84" y="63" font-size="12">GMS 国际服辅助工具</text>
+
+  <g class="font nav">
+    <rect x="16" y="116" width="204" height="42" rx="14" fill="transparent"/>
+    <circle class="muted" cx="38" cy="137" r="7"/>
+    <text class="muted" x="58" y="142">冷却放大镜</text>
+
+    <rect x="16" y="166" width="204" height="42" rx="14" fill="transparent"/>
+    <rect class="muted" x="31" y="180" width="14" height="14" rx="3"/>
+    <text class="muted" x="58" y="192">刷图倒计时</text>
+
+    <rect class="nav-active" x="16.5" y="216.5" width="203" height="41" rx="14"/>
+    <rect class="accent-strong" x="31" y="229" width="16" height="16" rx="4"/>
+    <rect class="white" x="35" y="233" width="8" height="2" rx="1"/>
+    <rect class="white" x="35" y="238" width="8" height="2" rx="1"/>
+    <text class="text" x="58" y="242">备忘录</text>
+
+    <rect x="16" y="266" width="204" height="42" rx="14" fill="transparent"/>
+    <rect class="muted" x="31" y="281" width="16" height="12" rx="3"/>
+    <text class="muted" x="58" y="292">热键</text>
+
+    <rect x="16" y="316" width="204" height="42" rx="14" fill="transparent"/>
+    <circle class="muted" cx="39" cy="337" r="8"/>
+    <text class="white" x="36" y="342" font-size="12" font-weight="900">i</text>
+    <text class="muted" x="58" y="342">关于</text>
+  </g>
+
+  <g transform="translate(260 24)">
+    <rect class="panel" x="0.5" y="0.5" width="1131" height="144" rx="22"/>
+    <text class="font accent-strong tiny" x="26" y="42">备忘录</text>
+    <text class="font text h1" x="26" y="82">把每日任务放成大卡片提醒</text>
+    <text class="font muted body" x="26" y="112">主界面只展示卡片墙，新增内容通过弹窗完成；每张卡片至少完整露出 5 个项目。</text>
+    <rect class="secondary" x="834" y="50" width="116" height="44" rx="13"/>
+    <text class="font muted nav" x="865" y="78">全部重置</text>
+    <rect class="button" x="964" y="50" width="138" height="44" rx="13"/>
+    <text class="font white nav" x="995" y="78">新增卡片</text>
+    <path d="M982 72 h14 M989 65 v14" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(260 192)">
+    <rect class="card" x="0.5" y="0.5" width="552" height="320" rx="20"/>
+    <rect class="chip" x="24.5" y="24.5" width="88" height="30" rx="15"/>
+    <text class="font accent-strong tiny" x="47" y="44">5 项</text>
+    <text class="font text title" x="24" y="91">每日任务卡片</text>
+    <text class="font muted small" x="24" y="119">今日还有 3 项未完成</text>
+    <text class="font accent-strong count" x="462" y="92">2/5</text>
+    <line x1="24" y1="140" x2="528" y2="140" stroke="rgba(45,63,84,0.13)"/>
+
+    <g class="font small">
+      <circle class="accent" cx="38" cy="169" r="8"/>
+      <path d="M34 169 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="174" text-decoration="line-through">乌鲁斯</text>
+
+      <circle class="accent" cx="38" cy="202" r="8"/>
+      <path d="M34 202 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="207" text-decoration="line-through">怪物公园</text>
+
+      <circle class="white" cx="38" cy="235" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="240">每日 boss</text>
+
+      <circle class="white" cx="38" cy="268" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="273">公会签到</text>
+
+      <circle class="white" cx="38" cy="301" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="306">领奖励箱</text>
+    </g>
+  </g>
+
+  <g transform="translate(840 192)">
+    <rect class="card" x="0.5" y="0.5" width="552" height="320" rx="20"/>
+    <rect x="24.5" y="24.5" width="98" height="30" rx="15" fill="rgba(73,119,210,0.10)" stroke="rgba(73,119,210,0.18)"/>
+    <text class="font blue tiny" x="48" y="44">BOSS</text>
+    <text class="font text title" x="24" y="91">每日 boss</text>
+    <text class="font muted small" x="24" y="119">今日还有 5 项未完成</text>
+    <text class="font blue count" x="462" y="92">0/5</text>
+    <line x1="24" y1="140" x2="528" y2="140" stroke="rgba(45,63,84,0.13)"/>
+
+    <g class="font small">
+      <circle class="white" cx="38" cy="169" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="174">扎昆</text>
+      <circle class="white" cx="38" cy="202" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="207">希拉</text>
+      <circle class="white" cx="38" cy="235" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="240">麦格纳斯</text>
+      <circle class="white" cx="38" cy="268" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="273">阿卡伊勒</text>
+      <circle class="white" cx="38" cy="301" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="306">狮子王</text>
+    </g>
+  </g>
+
+  <g transform="translate(260 540)">
+    <rect class="card-done" x="0.5" y="0.5" width="552" height="296" rx="20"/>
+    <rect class="chip" x="24.5" y="24.5" width="114" height="30" rx="15"/>
+    <text class="font accent-strong tiny" x="49" y="44">已完成</text>
+    <text class="font text title" x="24" y="91">怪物公园</text>
+    <text class="font muted small" x="24" y="119">今日清单已经全部完成</text>
+    <text class="font accent-strong count" x="462" y="92">5/5</text>
+    <line x1="24" y1="140" x2="528" y2="140" stroke="rgba(18,185,129,0.18)"/>
+
+    <g class="font small">
+      <circle class="accent" cx="38" cy="169" r="8"/>
+      <path d="M34 169 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="174" text-decoration="line-through">普通入场</text>
+      <circle class="accent" cx="38" cy="202" r="8"/>
+      <path d="M34 202 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="207" text-decoration="line-through">额外票券</text>
+      <circle class="accent" cx="38" cy="235" r="8"/>
+      <path d="M34 235 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="240" text-decoration="line-through">周日箱子</text>
+      <circle class="accent" cx="38" cy="268" r="8"/>
+      <path d="M34 268 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="273" text-decoration="line-through">经验券领取</text>
+    </g>
+  </g>
+
+  <g transform="translate(840 540)">
+    <rect class="card" x="0.5" y="0.5" width="552" height="296" rx="20"/>
+    <rect x="24.5" y="24.5" width="96" height="30" rx="15" fill="rgba(217,68,68,0.08)" stroke="rgba(217,68,68,0.18)"/>
+    <text class="font danger tiny" x="49" y="44">每周</text>
+    <text class="font text title" x="24" y="91">周常提醒</text>
+    <text class="font muted small" x="24" y="119">还有 2 项未完成</text>
+    <text class="font danger count" x="462" y="92">3/5</text>
+    <line x1="24" y1="140" x2="528" y2="140" stroke="rgba(45,63,84,0.13)"/>
+
+    <g class="font small">
+      <circle class="accent" cx="38" cy="169" r="8"/>
+      <path d="M34 169 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="174" text-decoration="line-through">公会贡献</text>
+      <circle class="accent" cx="38" cy="202" r="8"/>
+      <path d="M34 202 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="207" text-decoration="line-through">航海前置</text>
+      <circle class="accent" cx="38" cy="235" r="8"/>
+      <path d="M34 235 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="muted" x="58" y="240" text-decoration="line-through">周 boss 票</text>
+      <circle class="white" cx="38" cy="268" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="58" y="273">联盟任务</text>
+    </g>
+  </g>
+
+  <rect class="backdrop" x="236" y="0" width="1204" height="960"/>
+
+  <g transform="translate(468 176)">
+    <rect class="modal" x="0.5" y="0.5" width="692" height="608" rx="22"/>
+    <text class="font text" x="28" y="48" font-size="22" font-weight="830">新增备忘录卡片</text>
+    <text class="font muted small" x="28" y="76">在弹窗里创建卡片，保存后回到卡片墙展示。</text>
+    <rect class="secondary" x="638" y="24" width="30" height="30" rx="10"/>
+    <text class="font dim" x="648" y="45" font-size="18" font-weight="700">×</text>
+
+    <text class="font dim tiny" x="28" y="124">卡片标题</text>
+    <rect class="input" x="28.5" y="138.5" width="636" height="44" rx="13"/>
+    <text class="font text small" x="44" y="166">每日任务卡片</text>
+
+    <text class="font dim tiny" x="28" y="226">提醒项目</text>
+    <rect class="input" x="28.5" y="240.5" width="500" height="44" rx="13"/>
+    <text class="font muted small" x="44" y="268">输入新项目</text>
+    <rect class="secondary" x="540.5" y="240.5" width="124" height="44" rx="13"/>
+    <text class="font muted nav" x="586" y="268">添加</text>
+
+    <g class="font small">
+      <rect class="panel-soft" x="28.5" y="308.5" width="636" height="46" rx="14"/>
+      <circle class="accent" cx="52" cy="332" r="8"/>
+      <path d="M48 332 l3 3 l6 -7" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+      <text class="text" x="72" y="337">乌鲁斯</text>
+      <text class="dim" x="638" y="337" text-anchor="middle">×</text>
+
+      <rect class="panel-soft" x="28.5" y="364.5" width="636" height="46" rx="14"/>
+      <circle class="white" cx="52" cy="388" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="72" y="393">每日 boss</text>
+      <text class="dim" x="638" y="393" text-anchor="middle">×</text>
+
+      <rect class="panel-soft" x="28.5" y="420.5" width="636" height="46" rx="14"/>
+      <circle class="white" cx="52" cy="444" r="8" stroke="rgba(45,63,84,0.18)"/>
+      <text class="text" x="72" y="449">怪物公园</text>
+      <text class="dim" x="638" y="449" text-anchor="middle">×</text>
+    </g>
+
+    <rect class="secondary" x="380" y="526" width="132" height="46" rx="13"/>
+    <text class="font muted nav" x="432" y="554">取消</text>
+    <rect class="button" x="528" y="526" width="136" height="46" rx="13"/>
+    <text class="font white nav" x="568" y="554">保存卡片</text>
+  </g>
+</svg>

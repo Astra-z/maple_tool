@@ -1,8 +1,9 @@
-export const HOTKEY_ACTIONS = ['lensToggle', 'timerToggle'] as const
+export const HOTKEY_ACTIONS = ['lensToggle', 'timerToggle', 'timerReset'] as const
 
 export const DEFAULT_HOTKEY_SETTINGS = {
   lensToggle: 'CommandOrControl+Shift+M',
-  timerToggle: 'CommandOrControl+Shift+T'
+  timerToggle: 'CommandOrControl+Shift+T',
+  timerReset: 'CommandOrControl+Shift+R'
 } as const
 
 export const DEFAULT_LENS_PROFILE_HOTKEY_PREFIX = 'CommandOrControl+Shift'
@@ -35,6 +36,29 @@ export type UpdateCheckResult = {
   downloadUrl: string | null
   error: string | null
   checkedAt: string
+}
+
+export type MemoItem = {
+  id: string
+  text: string
+  completed: boolean
+}
+
+export type MemoCard = {
+  id: string
+  title: string
+  items: MemoItem[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type MemoState = {
+  cards: MemoCard[]
+}
+
+export type MemoCardInput = {
+  title: string
+  items: string[]
 }
 
 export const TIMER_FONT_OPTIONS = [

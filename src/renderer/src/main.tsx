@@ -4,7 +4,9 @@ import {
   Aperture,
   ArrowClockwise,
   ArrowSquareOut,
+  CardsThree,
   Check,
+  CheckCircle,
   ClockCountdown,
   Crosshair,
   Eye,
@@ -15,6 +17,7 @@ import {
   LockKey,
   LockKeyOpen,
   MusicNote,
+  Notepad,
   PencilSimple,
   Play,
   Plus,
@@ -34,6 +37,8 @@ import type {
   LensProfile,
   LensSettings,
   LensState,
+  MemoCard,
+  MemoState,
   SelectionPayload,
   TimerSettings,
   TimerState,
@@ -41,7 +46,7 @@ import type {
 } from '../../shared/types'
 import './styles.css'
 
-type MainTool = 'lens' | 'timer' | 'hotkeys' | 'about'
+type MainTool = 'lens' | 'timer' | 'memo' | 'hotkeys' | 'about'
 
 const LENS_RENDER_FPS = 12
 const LENS_RENDER_INTERVAL_MS = 1000 / LENS_RENDER_FPS
@@ -75,6 +80,10 @@ const defaultTimerState: TimerState = {
   remainingSeconds: defaultTimerSettings.intervalSeconds
 }
 
+const defaultMemoState: MemoState = {
+  cards: []
+}
+
 const defaultLensState: LensState = {
   config: null,
   profiles: [
@@ -95,7 +104,8 @@ const defaultHotkeyState: HotkeyState = {
   lensProfilePrefix: DEFAULT_LENS_PROFILE_HOTKEY_PREFIX,
   registered: {
     lensToggle: false,
-    timerToggle: false
+    timerToggle: false,
+    timerReset: false
   },
   error: null
 }
@@ -199,7 +209,8 @@ function normalizeHotkeyState(state: HotkeyState): HotkeyState {
     lensProfilePrefix: state.lensProfilePrefix ?? DEFAULT_LENS_PROFILE_HOTKEY_PREFIX,
     registered: {
       lensToggle: Boolean(state.registered?.lensToggle),
-      timerToggle: Boolean(state.registered?.timerToggle)
+      timerToggle: Boolean(state.registered?.timerToggle),
+      timerReset: Boolean(state.registered?.timerReset)
     },
     error: state.error ?? null
   }
@@ -292,7 +303,7 @@ function shortcutToProfilePrefix(shortcut: string): string | null {
 function getInitialMainTool(): MainTool {
   try {
     const savedTool = window.localStorage.getItem('maple.activeTool')
-    if (savedTool === 'lens' || savedTool === 'timer' || savedTool === 'hotkeys' || savedTool === 'about') {
+    if (savedTool === 'lens' || savedTool === 'timer' || savedTool === 'memo' || savedTool === 'hotkeys' || savedTool === 'about') {
       return savedTool
     }
   } catch {
@@ -306,6 +317,7 @@ function MainPanel(): React.ReactElement {
   const [lensState, setLensState] = useState<LensState>(defaultLensState)
   const [settings, setSettings] = useState<LensSettings>(defaultRendererSettings)
   const [timerState, setTimerState] = useState<TimerState>(defaultTimerState)
+  const [memoState, setMemoState] = useState<MemoState>(defaultMemoState)
   const [hotkeyState, setHotkeyState] = useState<HotkeyState>(defaultHotkeyState)
   const [appInfo, setAppInfo] = useState<AppInfo>(defaultAppInfo)
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null)
@@ -342,6 +354,10 @@ function MainPanel(): React.ReactElement {
   }, [])
 
   useEffect(() => {
+    window.maple.getMemoState().then(setMemoState)
+  }, [])
+
+  useEffect(() => {
     window.maple.getHotkeyState().then((state) => setHotkeyState(normalizeHotkeyState(state)))
     return window.maple.onHotkeysUpdated((state) => setHotkeyState(normalizeHotkeyState(state)))
   }, [])
@@ -352,7 +368,7 @@ function MainPanel(): React.ReactElement {
 
   useEffect(() => {
     return window.maple.onMainToolSelected((tool) => {
-      if (tool === 'lens' || tool === 'timer' || tool === 'hotkeys' || tool === 'about') {
+      if (tool === 'lens' || tool === 'timer' || tool === 'memo' || tool === 'hotkeys' || tool === 'about') {
         setActiveTool(tool)
       }
     })
@@ -383,7 +399,7 @@ function MainPanel(): React.ReactElement {
       if (!current.config || !current.activeCaptureId) return current
 
       const updateCapture = (capture: LensCapture): LensCapture =>
-        capture.id === current.activeCaptureId
+        next.opacity !== undefined || capture.id === current.activeCaptureId
           ? { ...capture, settings: { ...capture.settings, ...next } }
           : capture
 
@@ -513,6 +529,29 @@ function MainPanel(): React.ReactElement {
     setTimerState(normalizeTimerState(nextState))
   }
 
+  const resetTimer = async (): Promise<void> => {
+    const nextState = await window.maple.resetTimer()
+    setTimerState(normalizeTimerState(nextState))
+  }
+
+  const createMemoCard = async (title: string, items: string[]): Promise<void> => {
+    setMemoState(await window.maple.createMemoCard({ title, items }))
+  }
+
+  const toggleMemoItem = async (cardId: string, itemId: string): Promise<void> => {
+    setMemoState(await window.maple.toggleMemoItem(cardId, itemId))
+  }
+
+  const deleteMemoCard = async (card: MemoCard): Promise<void> => {
+    if (!window.confirm(`删除备忘录卡片「${card.title}」？`)) return
+    setMemoState(await window.maple.deleteMemoCard(card.id))
+  }
+
+  const resetMemoCards = async (): Promise<void> => {
+    if (memoState.cards.length === 0) return
+    setMemoState(await window.maple.resetMemoCards())
+  }
+
   const createTimerProfile = async (): Promise<void> => {
     const nextState = await window.maple.createTimerProfile(`配置 ${timerState.profiles.length + 1}`)
     setTimerState(normalizeTimerState(nextState))
@@ -614,6 +653,14 @@ function MainPanel(): React.ReactElement {
           >
             <ClockCountdown size={18} weight="bold" />
             <span>刷图倒计时</span>
+          </button>
+          <button
+            className={`tool-nav-item ${activeTool === 'memo' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setActiveTool('memo')}
+          >
+            <Notepad size={18} weight="bold" />
+            <span>备忘录</span>
           </button>
           <button
             className={`tool-nav-item ${activeTool === 'hotkeys' ? 'active' : ''}`}
@@ -847,6 +894,7 @@ function MainPanel(): React.ReactElement {
             resetAudio={resetAudio}
             startTimer={startTimer}
             stopTimer={stopTimer}
+            resetTimer={resetTimer}
             createTimerProfile={createTimerProfile}
             selectTimerProfile={selectTimerProfile}
             beginTimerProfileEdit={beginTimerProfileEdit}
@@ -856,6 +904,14 @@ function MainPanel(): React.ReactElement {
             editingTimerProfileId={editingTimerProfileId}
             timerProfileNameDraft={timerProfileNameDraft}
             setTimerProfileNameDraft={setTimerProfileNameDraft}
+          />
+        ) : activeTool === 'memo' ? (
+          <MemoPanel
+            memoState={memoState}
+            createMemoCard={createMemoCard}
+            toggleMemoItem={toggleMemoItem}
+            deleteMemoCard={deleteMemoCard}
+            resetMemoCards={resetMemoCards}
           />
         ) : activeTool === 'hotkeys' ? (
           <HotkeysPanel
@@ -970,6 +1026,231 @@ function AboutPanel({
   )
 }
 
+function MemoPanel({
+  memoState,
+  createMemoCard,
+  toggleMemoItem,
+  deleteMemoCard,
+  resetMemoCards
+}: {
+  memoState: MemoState
+  createMemoCard: (title: string, items: string[]) => Promise<void>
+  toggleMemoItem: (cardId: string, itemId: string) => Promise<void>
+  deleteMemoCard: (card: MemoCard) => Promise<void>
+  resetMemoCards: () => Promise<void>
+}): React.ReactElement {
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [itemDraft, setItemDraft] = useState('')
+  const [itemDrafts, setItemDrafts] = useState<string[]>([])
+
+  const resetDialog = (): void => {
+    setTitleDraft('')
+    setItemDraft('')
+    setItemDrafts([])
+  }
+
+  const openDialog = (): void => {
+    resetDialog()
+    setDialogOpen(true)
+  }
+
+  const closeDialog = (): void => {
+    setDialogOpen(false)
+    resetDialog()
+  }
+
+  const addItemDraft = (): void => {
+    const text = itemDraft.trim()
+    if (!text) return
+    setItemDrafts((current) => [...current, text])
+    setItemDraft('')
+  }
+
+  const removeItemDraft = (index: number): void => {
+    setItemDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))
+  }
+
+  const saveCard = async (): Promise<void> => {
+    const title = titleDraft.trim()
+    if (!title || itemDrafts.length === 0) return
+
+    await createMemoCard(title, itemDrafts)
+    closeDialog()
+  }
+
+  return (
+    <>
+      <section className="tool-header">
+        <div>
+          <p className="section-kicker">备忘录</p>
+          <h1>把每日任务放成大卡片提醒</h1>
+          <p className="header-copy">主界面只展示卡片墙，新增内容通过弹窗完成；每张卡片至少完整露出 5 个项目。</p>
+        </div>
+
+        <div className="header-actions">
+          <button className="secondary-button" type="button" onClick={() => void resetMemoCards()} disabled={memoState.cards.length === 0}>
+            <ArrowClockwise size={17} weight="bold" />
+            <span>全部重置</span>
+          </button>
+          <button className="primary-button" type="button" onClick={openDialog}>
+            <Plus size={18} weight="bold" />
+            <span>新增卡片</span>
+          </button>
+        </div>
+      </section>
+
+      {memoState.cards.length === 0 ? (
+        <section className="memo-empty-panel" aria-label="备忘录空状态">
+          <CardsThree size={28} weight="bold" />
+          <strong>还没有备忘录卡片</strong>
+          <span>点击新增卡片，创建乌鲁斯、每日 boss、怪物公园这类固定清单。</span>
+        </section>
+      ) : (
+        <section className="memo-grid" aria-label="备忘录卡片列表">
+          {memoState.cards.map((card) => (
+            <MemoCardView
+              card={card}
+              key={card.id}
+              toggleMemoItem={toggleMemoItem}
+              deleteMemoCard={deleteMemoCard}
+            />
+          ))}
+        </section>
+      )}
+
+      {dialogOpen && (
+        <div className="memo-dialog-backdrop" role="presentation">
+          <section className="memo-dialog" role="dialog" aria-modal="true" aria-labelledby="memo-dialog-title">
+            <div className="memo-dialog-heading">
+              <div>
+                <h2 id="memo-dialog-title">新增备忘录卡片</h2>
+                <p>在弹窗里创建卡片，保存后回到卡片墙展示。</p>
+              </div>
+              <button className="icon-button" type="button" onClick={closeDialog} aria-label="关闭新增备忘录弹窗">
+                <X size={16} weight="bold" />
+              </button>
+            </div>
+
+            <label className="memo-field">
+              <span>卡片标题</span>
+              <input
+                value={titleDraft}
+                autoFocus
+                placeholder="例如：每日任务卡片"
+                onChange={(event) => setTitleDraft(event.currentTarget.value)}
+              />
+            </label>
+
+            <label className="memo-field">
+              <span>提醒项目</span>
+              <div className="memo-add-row">
+                <input
+                  value={itemDraft}
+                  placeholder="输入新项目"
+                  onChange={(event) => setItemDraft(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      addItemDraft()
+                    }
+                  }}
+                />
+                <button className="secondary-button compact-button" type="button" onClick={addItemDraft} disabled={!itemDraft.trim()}>
+                  <span>添加</span>
+                </button>
+              </div>
+            </label>
+
+            <div className="memo-draft-list">
+              {itemDrafts.length === 0 ? (
+                <div className="memo-draft-empty">至少添加 1 个提醒项目</div>
+              ) : (
+                itemDrafts.map((item, index) => (
+                  <div className="memo-draft-row" key={`${item}-${index}`}>
+                    <CheckCircle size={18} weight={index === 0 ? 'fill' : 'regular'} />
+                    <span>{item}</span>
+                    <button type="button" onClick={() => removeItemDraft(index)} aria-label={`移除 ${item}`}>
+                      <X size={14} weight="bold" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="memo-dialog-actions">
+              <button className="secondary-button" type="button" onClick={closeDialog}>
+                <span>取消</span>
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void saveCard()}
+                disabled={!titleDraft.trim() || itemDrafts.length === 0}
+              >
+                <span>保存卡片</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  )
+}
+
+function MemoCardView({
+  card,
+  toggleMemoItem,
+  deleteMemoCard
+}: {
+  card: MemoCard
+  toggleMemoItem: (cardId: string, itemId: string) => Promise<void>
+  deleteMemoCard: (card: MemoCard) => Promise<void>
+}): React.ReactElement {
+  const completedCount = card.items.filter((item) => item.completed).length
+  const totalCount = card.items.length
+  const remainingCount = totalCount - completedCount
+  const visibleItems = card.items.slice(0, 5)
+  const hiddenCount = Math.max(0, totalCount - visibleItems.length)
+  const isDone = totalCount > 0 && remainingCount === 0
+
+  return (
+    <article className={`memo-card ${isDone ? 'is-complete' : ''}`}>
+      <div className="memo-card-topline">
+        <span className={`memo-card-chip ${isDone ? 'is-complete' : ''}`}>{isDone ? '已完成' : `${totalCount} 项`}</span>
+        <button className="icon-button danger" type="button" onClick={() => void deleteMemoCard(card)} aria-label={`删除 ${card.title}`}>
+          <Trash size={16} weight="bold" />
+        </button>
+      </div>
+
+      <div className="memo-card-heading">
+        <div>
+          <h2>{card.title}</h2>
+          <p>{isDone ? '今日清单已经全部完成' : `今日还有 ${remainingCount} 项未完成`}</p>
+        </div>
+        <strong>
+          {completedCount}/{totalCount}
+        </strong>
+      </div>
+
+      <div className="memo-card-items">
+        {visibleItems.map((item) => (
+          <button
+            className={`memo-item ${item.completed ? 'is-complete' : ''}`}
+            type="button"
+            key={item.id}
+            onClick={() => void toggleMemoItem(card.id, item.id)}
+          >
+            <span className="memo-check">{item.completed && <Check size={12} weight="bold" />}</span>
+            <span>{item.text}</span>
+          </button>
+        ))}
+        {hiddenCount > 0 && <div className="memo-more">还有 {hiddenCount} 项，打开编辑时查看全部</div>}
+      </div>
+    </article>
+  )
+}
+
 function TimerPanel({
   timerState,
   updateTimerSetting,
@@ -977,6 +1258,7 @@ function TimerPanel({
   resetAudio,
   startTimer,
   stopTimer,
+  resetTimer,
   createTimerProfile,
   selectTimerProfile,
   beginTimerProfileEdit,
@@ -993,6 +1275,7 @@ function TimerPanel({
   resetAudio: () => Promise<void>
   startTimer: () => Promise<void>
   stopTimer: () => Promise<void>
+  resetTimer: () => Promise<void>
   createTimerProfile: () => Promise<void>
   selectTimerProfile: (profileId: string) => Promise<void>
   beginTimerProfileEdit: () => void
@@ -1044,6 +1327,10 @@ function TimerPanel({
               <span>开始计时</span>
             </button>
           )}
+          <button className="secondary-button" type="button" onClick={resetTimer}>
+            <ArrowClockwise size={17} weight="bold" />
+            <span>重置时间</span>
+          </button>
           {timerState.isOpen ? (
             <button className="secondary-button" type="button" onClick={() => window.maple.closeTimer()}>
               <Eye size={17} />
@@ -1306,6 +1593,11 @@ function HotkeysPanel({
       action: 'timerToggle',
       title: '打开 / 关闭倒计时浮层',
       description: '全局生效，重新打开时会使用上次放置的位置。'
+    },
+    {
+      action: 'timerReset',
+      title: '重置倒计时时间',
+      description: '全局生效，将当前倒计时恢复到当前配置的完整间隔。'
     }
   ]
 

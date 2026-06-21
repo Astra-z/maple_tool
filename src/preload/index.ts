@@ -6,6 +6,8 @@ import type {
   LensCapture,
   LensSettings,
   LensState,
+  MemoCardInput,
+  MemoState,
   ScreenSource,
   SelectionPayload,
   TimerSettings,
@@ -87,6 +89,9 @@ const api = {
   stopTimer: (): Promise<TimerState> => {
     return ipcRenderer.invoke('timer:stop')
   },
+  resetTimer: (): Promise<TimerState> => {
+    return ipcRenderer.invoke('timer:reset')
+  },
   getTimerAudioDataUrl: (): Promise<string | null> => {
     return ipcRenderer.invoke('timer:get-audio-data-url')
   },
@@ -101,6 +106,21 @@ const api = {
   },
   toggleTimer: (): Promise<TimerState> => {
     return ipcRenderer.invoke('timer:toggle')
+  },
+  getMemoState: (): Promise<MemoState> => {
+    return ipcRenderer.invoke('memo:get-state')
+  },
+  createMemoCard: (input: MemoCardInput): Promise<MemoState> => {
+    return ipcRenderer.invoke('memo:create-card', input)
+  },
+  toggleMemoItem: (cardId: string, itemId: string): Promise<MemoState> => {
+    return ipcRenderer.invoke('memo:toggle-item', cardId, itemId)
+  },
+  deleteMemoCard: (cardId: string): Promise<MemoState> => {
+    return ipcRenderer.invoke('memo:delete-card', cardId)
+  },
+  resetMemoCards: (): Promise<MemoState> => {
+    return ipcRenderer.invoke('memo:reset-all')
   },
   getHotkeyState: (): Promise<HotkeyState> => {
     return ipcRenderer.invoke('hotkeys:get-state')

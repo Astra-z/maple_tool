@@ -18,6 +18,10 @@ import type {
   LensProfile,
   LensSettings,
   LensState,
+  MemoCard,
+  MemoCardInput,
+  MemoItem,
+  MemoState,
   Rect,
   SelectionPayload,
   TimerSettings,
@@ -55,6 +59,7 @@ type PersistedAppState = {
   timerOpen?: boolean
   timerWindowBounds?: Electron.Rectangle
   hotkeySettings?: Partial<HotkeySettings>
+  memoCards?: MemoCard[]
 }
 
 let persistedState: PersistedAppState = {}
@@ -79,6 +84,16 @@ const defaultTimerSettings: TimerSettings = {
   locked: false
 }
 
+const defaultTimerWindowSize = {
+  width: 178,
+  height: 92
+}
+
+const minimumTimerWindowSize = {
+  width: 156,
+  height: 82
+}
+
 let timerSettings: TimerSettings = { ...defaultTimerSettings }
 let timerProfiles: TimerProfile[] = []
 let activeTimerProfileId = 'default'
@@ -89,10 +104,12 @@ let timerRunning = false
 let timerReachedZero = false
 let timerAudioCache: { path: string; mtimeMs: number; dataUrl: string } | null = null
 let hotkeySettings: HotkeySettings = { ...DEFAULT_HOTKEY_SETTINGS }
+let memoCards: MemoCard[] = []
 let lensProfileShortcutPrefix = DEFAULT_LENS_PROFILE_HOTKEY_PREFIX
 let registeredHotkeys: Record<HotkeyAction, boolean> = {
   lensToggle: false,
-  timerToggle: false
+  timerToggle: false,
+  timerReset: false
 }
 let registeredLensProfileShortcuts = new Map<string, boolean>()
 
@@ -110,6 +127,37 @@ function normalizeLensSettings(settings?: Partial<LensSettings>): LensSettings {
 
 function mergeLensSettings(settings: Partial<LensSettings>): LensSettings {
   return normalizeLensSettings({ ...currentLensSettings, ...settings })
+}
+
+function lensSettingsWithGlobalOpacity(settings?: Partial<LensSettings>): LensSettings {
+  return {
+    ...normalizeLensSettings(settings),
+    opacity: currentLensSettings.opacity
+  }
+}
+
+function lensCaptureWithGlobalOpacity(capture: LensCapture): LensCapture {
+  return {
+    ...capture,
+    settings: lensSettingsWithGlobalOpacity(capture.settings)
+  }
+}
+
+function defaultLensSettingsWithGlobalOpacity(): LensSettings {
+  return {
+    ...defaultLensSettings,
+    opacity: currentLensSettings.opacity
+  }
+}
+
+function syncGlobalLensOpacityToCaptures(): void {
+  lensProfiles = lensProfiles.map((profile) => ({
+    ...profile,
+    captures: profile.captures.map((capture) => ({
+      ...capture,
+      settings: lensSettingsWithGlobalOpacity(capture.settings)
+    }))
+  }))
 }
 
 function normalizeVersion(version: string): number[] {
@@ -188,7 +236,7 @@ function normalizeLensCapture(capture: Partial<LensCapture>, index: number): Len
     name: typeof capture.name === 'string' && capture.name.trim() ? capture.name.trim() : `技能 ${index + 1}`,
     display,
     region,
-    settings: normalizeLensSettings(capture.settings),
+    settings: lensSettingsWithGlobalOpacity(capture.settings),
     windowBounds: normalizeRect(capture.windowBounds, 80, 60) ?? undefined
   }
 }
@@ -236,7 +284,7 @@ function ensureLensProfiles(): void {
 
   const activeCapture = getActiveLensCapture()
   if (activeCapture) {
-    currentLensSettings = normalizeLensSettings(activeCapture.settings)
+    currentLensSettings = lensSettingsWithGlobalOpacity(activeCapture.settings)
   }
 }
 
@@ -344,6 +392,49 @@ function normalizeTimerProfiles(profiles?: TimerProfile[]): TimerProfile[] {
   return profiles
     .map((profile, index) => normalizeTimerProfile(profile, index))
     .filter((profile): profile is TimerProfile => Boolean(profile))
+}
+
+function normalizeMemoItem(item: Partial<MemoItem> | null | undefined, index: number): MemoItem | null {
+  if (!item) return null
+
+  const text = typeof item.text === 'string' ? item.text.trim() : ''
+  if (!text) return null
+
+  return {
+    id: typeof item.id === 'string' && item.id.trim() ? item.id : createId('memo-item'),
+    text,
+    completed: Boolean(item.completed)
+  }
+}
+
+function normalizeMemoCard(card: Partial<MemoCard> | null | undefined, index: number): MemoCard | null {
+  if (!card) return null
+
+  const title = typeof card.title === 'string' && card.title.trim() ? card.title.trim() : `备忘录 ${index + 1}`
+  const items = Array.isArray(card.items)
+    ? card.items
+        .slice(0, 50)
+        .map((item, itemIndex) => normalizeMemoItem(item, itemIndex))
+        .filter((item): item is MemoItem => Boolean(item))
+    : []
+  const createdAt = typeof card.createdAt === 'string' && card.createdAt.trim() ? card.createdAt : new Date().toISOString()
+  const updatedAt = typeof card.updatedAt === 'string' && card.updatedAt.trim() ? card.updatedAt : createdAt
+
+  return {
+    id: typeof card.id === 'string' && card.id.trim() ? card.id : createId('memo-card'),
+    title,
+    items,
+    createdAt,
+    updatedAt
+  }
+}
+
+function normalizeMemoCards(cards?: MemoCard[]): MemoCard[] {
+  if (!Array.isArray(cards)) return []
+
+  return cards
+    .map((card, index) => normalizeMemoCard(card, index))
+    .filter((card): card is MemoCard => Boolean(card))
 }
 
 function getActiveTimerProfile(): TimerProfile | null {
@@ -669,6 +760,7 @@ function savePersistedState(): void {
     activeTimerProfileId,
     timerSettings,
     hotkeySettings,
+    memoCards,
     timerOpen: Boolean(timerWindow && !timerWindow.isDestroyed()),
     timerWindowBounds:
       timerWindow && !timerWindow.isDestroyed()
@@ -726,7 +818,7 @@ function restorePersistedState(): void {
     timerProfiles = [
       {
         ...createDefaultTimerProfile(legacyTimerSettings),
-        windowBounds: normalizeRect(persistedState.timerWindowBounds, 80, 60) ?? undefined
+        windowBounds: normalizeRect(persistedState.timerWindowBounds, minimumTimerWindowSize.width, minimumTimerWindowSize.height) ?? undefined
       }
     ]
   }
@@ -734,6 +826,7 @@ function restorePersistedState(): void {
   activeTimerProfileId = persistedState.activeTimerProfileId ?? timerProfiles[0].id
   ensureTimerProfiles()
   hotkeySettings = normalizeHotkeySettings(persistedState.hotkeySettings)
+  memoCards = normalizeMemoCards(persistedState.memoCards)
   resetTimerDeadline()
 }
 
@@ -752,11 +845,13 @@ function getLensState(): LensState {
   ensureLensProfiles()
   const activeProfile = getActiveLensProfile()
   const activeOpenCaptureIds = new Set(getOpenLensCaptureIds())
+  const activeCapture = getActiveLensCapture()
 
   return {
-    config: getActiveLensCapture(),
+    config: activeCapture ? lensCaptureWithGlobalOpacity(activeCapture) : null,
     profiles: lensProfiles.map((profile, index) => ({
       ...profile,
+      captures: profile.captures.map(lensCaptureWithGlobalOpacity),
       shortcut: lensProfileShortcut(index),
       shortcutRegistered: registeredLensProfileShortcuts.get(profile.id) ?? false
     })),
@@ -789,6 +884,69 @@ function getTimerState(): TimerState {
     isRunning: timerRunning,
     remainingSeconds: getTimerRemainingSeconds()
   }
+}
+
+function getMemoState(): MemoState {
+  memoCards = normalizeMemoCards(memoCards)
+  return {
+    cards: memoCards
+  }
+}
+
+function createMemoCard(input: Partial<MemoCardInput> | null | undefined): MemoState {
+  const title = typeof input?.title === 'string' && input.title.trim() ? input.title.trim() : `备忘录 ${memoCards.length + 1}`
+  const itemTexts = Array.isArray(input?.items)
+    ? input.items.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean).slice(0, 50)
+    : []
+  const now = new Date().toISOString()
+  const card: MemoCard = {
+    id: createId('memo-card'),
+    title,
+    items: itemTexts.map((text) => ({
+      id: createId('memo-item'),
+      text,
+      completed: false
+    })),
+    createdAt: now,
+    updatedAt: now
+  }
+
+  memoCards = [card, ...memoCards]
+  savePersistedState()
+  return getMemoState()
+}
+
+function toggleMemoItem(cardId: string, itemId: string): MemoState {
+  const now = new Date().toISOString()
+  memoCards = memoCards.map((card) => {
+    if (card.id !== cardId) return card
+
+    return {
+      ...card,
+      items: card.items.map((item) => (item.id === itemId ? { ...item, completed: !item.completed } : item)),
+      updatedAt: now
+    }
+  })
+
+  savePersistedState()
+  return getMemoState()
+}
+
+function deleteMemoCard(cardId: string): MemoState {
+  memoCards = memoCards.filter((card) => card.id !== cardId)
+  savePersistedState()
+  return getMemoState()
+}
+
+function resetMemoCards(): MemoState {
+  const now = new Date().toISOString()
+  memoCards = memoCards.map((card) => ({
+    ...card,
+    items: card.items.map((item) => ({ ...item, completed: false })),
+    updatedAt: now
+  }))
+  savePersistedState()
+  return getMemoState()
 }
 
 function broadcastTimerState(): void {
@@ -850,6 +1008,15 @@ function stopTimer(): TimerState {
   timerRunning = false
   resetTimerDeadline()
   stopTimerTicker()
+  broadcastTimerState()
+  return getTimerState()
+}
+
+function resetTimer(): TimerState {
+  resetTimerDeadline()
+  if (timerRunning) {
+    ensureTimerTicker()
+  }
   broadcastTimerState()
   return getTimerState()
 }
@@ -1097,7 +1264,7 @@ function selectLensProfile(profileId: string): LensState {
   activeLensProfileId = profileId
   activeLensCaptureId = getActiveLensProfile()?.captures[0]?.id ?? null
   const activeCapture = getActiveLensCapture()
-  currentLensSettings = activeCapture ? normalizeLensSettings(activeCapture.settings) : { ...defaultLensSettings }
+  currentLensSettings = activeCapture ? lensSettingsWithGlobalOpacity(activeCapture.settings) : defaultLensSettingsWithGlobalOpacity()
 
   if (shouldRestoreLens) {
     lensVisible = true
@@ -1295,6 +1462,11 @@ function refreshApplicationMenu(): void {
           click: toggleTimer
         },
         {
+          label: '重置倒计时',
+          accelerator: hotkeySettings.timerReset,
+          click: resetTimer
+        },
+        {
           label: process.platform === 'win32' ? '最小化到托盘' : '最小化主窗口',
           accelerator: process.platform === 'darwin' ? 'Command+M' : 'Ctrl+M',
           click: minimizeMainWindow
@@ -1328,13 +1500,15 @@ function registerGlobalShortcuts(shouldBroadcast = true): void {
   globalShortcut.unregisterAll()
   registeredHotkeys = {
     lensToggle: false,
-    timerToggle: false
+    timerToggle: false,
+    timerReset: false
   }
   registeredLensProfileShortcuts = new Map()
 
   const shortcutHandlers: Record<HotkeyAction, () => void> = {
     lensToggle: toggleLens,
-    timerToggle: toggleTimer
+    timerToggle: toggleTimer,
+    timerReset: resetTimer
   }
   const registeredShortcuts = new Set<string>()
 
@@ -1609,24 +1783,35 @@ function createTimerWindow(restoredBounds?: Partial<Rect>): void {
 
   const primaryDisplay = screen.getPrimaryDisplay()
   const bounds = primaryDisplay.bounds
-  const width = 260
-  const height = 136
   const activeProfile = getActiveTimerProfile()
-  const windowBounds =
-    normalizeWindowBounds(restoredBounds ?? activeProfile?.windowBounds) ?? {
-      x: Math.round(bounds.x + bounds.width - width - 48),
-      y: Math.round(bounds.y + 96),
-      width,
-      height
-    }
+  const restoredWindowBounds = normalizeWindowBounds(restoredBounds ?? activeProfile?.windowBounds, minimumTimerWindowSize)
+  const shouldResetLegacyTimerSize =
+    restoredWindowBounds &&
+    restoredWindowBounds.width >= 220 &&
+    restoredWindowBounds.width <= 280 &&
+    restoredWindowBounds.height >= 112 &&
+    restoredWindowBounds.height <= 150
+  const windowBounds = restoredWindowBounds
+    ? {
+        x: restoredWindowBounds.x,
+        y: restoredWindowBounds.y,
+        width: shouldResetLegacyTimerSize ? defaultTimerWindowSize.width : restoredWindowBounds.width,
+        height: shouldResetLegacyTimerSize ? defaultTimerWindowSize.height : restoredWindowBounds.height
+      }
+    : {
+        x: Math.round(bounds.x + bounds.width - defaultTimerWindowSize.width - 48),
+        y: Math.round(bounds.y + 96),
+        width: defaultTimerWindowSize.width,
+        height: defaultTimerWindowSize.height
+      }
 
   timerWindow = new BrowserWindow({
     x: windowBounds.x,
     y: windowBounds.y,
     width: windowBounds.width,
     height: windowBounds.height,
-    minWidth: 220,
-    minHeight: 112,
+    minWidth: minimumTimerWindowSize.width,
+    minHeight: minimumTimerWindowSize.height,
     frame: false,
     transparent: true,
     resizable: !timerSettings.locked,
@@ -1741,7 +1926,7 @@ ipcMain.on('selection:complete', (_event, payload: SelectionPayload) => {
   )
   activeLensProfileId = activeProfile.id
   activeLensCaptureId = capture.id
-  currentLensSettings = normalizeLensSettings(capture.settings)
+  currentLensSettings = lensSettingsWithGlobalOpacity(capture.settings)
 
   closeSelectorWindows()
   createLensWindow(capture)
@@ -1759,10 +1944,12 @@ ipcMain.handle('screen:get-source', (_event, displayId: string) => {
 
 ipcMain.handle('lens:get-config', (_event, captureId?: string) => {
   if (typeof captureId === 'string' && captureId.trim()) {
-    return findLensCapture(captureId)?.capture ?? null
+    const capture = findLensCapture(captureId)?.capture ?? null
+    return capture ? lensCaptureWithGlobalOpacity(capture) : null
   }
 
-  return getActiveLensCapture()
+  const activeCapture = getActiveLensCapture()
+  return activeCapture ? lensCaptureWithGlobalOpacity(activeCapture) : null
 })
 
 ipcMain.handle('lens:get-state', () => {
@@ -1771,30 +1958,36 @@ ipcMain.handle('lens:get-state', () => {
 
 ipcMain.on('lens:update-settings', (_event, settings: Partial<LensSettings>, captureId?: string) => {
   currentLensSettings = mergeLensSettings(settings)
+  const updatesAllCaptures = settings.opacity !== undefined
   const targetCaptureId = typeof captureId === 'string' && captureId.trim() ? captureId : activeLensCaptureId
 
-  if (!targetCaptureId) {
+  if (updatesAllCaptures) {
+    syncGlobalLensOpacityToCaptures()
+  } else if (targetCaptureId) {
+    updateLensCapture(targetCaptureId, (capture) => ({
+      ...capture,
+      settings: lensSettingsWithGlobalOpacity({
+        ...capture.settings,
+        ...settings
+      })
+    }))
+  } else {
     savePersistedState()
     broadcastLensState()
     return
   }
 
-  updateLensCapture(targetCaptureId, (capture) => ({
-    ...capture,
-    settings: currentLensSettings
-  }))
+  for (const [openCaptureId, lensWindow] of lensWindows) {
+    if (lensWindow.isDestroyed()) continue
+    if (!updatesAllCaptures && openCaptureId !== targetCaptureId) continue
 
-  const lensWindow = lensWindows.get(targetCaptureId)
+    const capture = findLensCapture(openCaptureId)?.capture
+    if (!capture) continue
 
-  if (
-    lensWindow &&
-    !lensWindow.isDestroyed() &&
-    (settings.opacity !== undefined || settings.locked !== undefined)
-  ) {
-    applyLensWindowBehavior(lensWindow, currentLensSettings)
+    applyLensWindowBehavior(lensWindow, capture.settings)
+    lensWindow.webContents.send('lens:settings', capture.settings)
   }
 
-  lensWindow?.webContents.send('lens:settings', currentLensSettings)
   broadcastLensState()
   savePersistedState()
 })
@@ -1819,7 +2012,7 @@ ipcMain.handle('lens:create-profile', (_event, name: string) => {
   lensProfiles = [...lensProfiles, profile]
   activeLensProfileId = profile.id
   activeLensCaptureId = null
-  currentLensSettings = { ...defaultLensSettings }
+  currentLensSettings = defaultLensSettingsWithGlobalOpacity()
   registerGlobalShortcuts(false)
   savePersistedState()
   broadcastLensState()
@@ -1870,7 +2063,7 @@ ipcMain.handle('lens:select-capture', (_event, captureId: string) => {
 
   activeLensProfileId = result.profile.id
   activeLensCaptureId = result.capture.id
-  currentLensSettings = normalizeLensSettings(result.capture.settings)
+  currentLensSettings = lensSettingsWithGlobalOpacity(result.capture.settings)
   savePersistedState()
   broadcastLensState()
   return getLensState()
@@ -1905,7 +2098,7 @@ ipcMain.handle('lens:delete-capture', (_event, captureId: string) => {
   if (activeLensCaptureId === captureId) {
     activeLensCaptureId = getActiveLensProfile()?.captures[0]?.id ?? null
     const activeCapture = getActiveLensCapture()
-    currentLensSettings = activeCapture ? normalizeLensSettings(activeCapture.settings) : { ...defaultLensSettings }
+    currentLensSettings = activeCapture ? lensSettingsWithGlobalOpacity(activeCapture.settings) : defaultLensSettingsWithGlobalOpacity()
   }
 
   savePersistedState()
@@ -2012,6 +2205,10 @@ ipcMain.handle('timer:stop', () => {
   return stopTimer()
 })
 
+ipcMain.handle('timer:reset', () => {
+  return resetTimer()
+})
+
 ipcMain.handle('timer:get-audio-data-url', () => {
   return getTimerAudioDataUrl()
 })
@@ -2026,6 +2223,26 @@ ipcMain.on('timer:close', () => {
 
 ipcMain.handle('timer:toggle', () => {
   return toggleTimer()
+})
+
+ipcMain.handle('memo:get-state', () => {
+  return getMemoState()
+})
+
+ipcMain.handle('memo:create-card', (_event, input: MemoCardInput) => {
+  return createMemoCard(input)
+})
+
+ipcMain.handle('memo:toggle-item', (_event, cardId: string, itemId: string) => {
+  return toggleMemoItem(cardId, itemId)
+})
+
+ipcMain.handle('memo:delete-card', (_event, cardId: string) => {
+  return deleteMemoCard(cardId)
+})
+
+ipcMain.handle('memo:reset-all', () => {
+  return resetMemoCards()
 })
 
 ipcMain.handle('hotkeys:get-state', () => {

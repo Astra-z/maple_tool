@@ -182,7 +182,8 @@ p {
 .settings-panel,
 .hotkeys-panel,
 .timer-settings-panel,
-.timer-preview-panel {
+.timer-preview-panel,
+.memo-empty-panel {
   border: 1px solid var(--line);
   border-radius: 22px;
   background: var(--surface);
@@ -620,6 +621,295 @@ p {
   display: grid;
   grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 1.1fr);
   gap: 18px;
+}
+
+.memo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(360px, 1fr));
+  gap: 24px;
+}
+
+.memo-card {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+  min-height: 320px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+
+.memo-card.is-complete {
+  border-color: rgba(18, 185, 129, 0.24);
+  background: rgba(18, 185, 129, 0.08);
+}
+
+.memo-card-topline,
+.memo-card-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.memo-card-chip {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 30px;
+  align-items: center;
+  border: 1px solid rgba(18, 185, 129, 0.18);
+  border-radius: 999px;
+  background: rgba(18, 185, 129, 0.1);
+  color: var(--accent-strong);
+  padding: 0 22px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.memo-card-chip.is-complete {
+  min-width: 112px;
+  justify-content: center;
+}
+
+.memo-card-heading h2 {
+  overflow-wrap: anywhere;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.memo-card-heading p {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.memo-card-heading strong {
+  color: var(--accent-strong);
+  font-size: 38px;
+  line-height: 1;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.memo-card:not(.is-complete):nth-child(2n) .memo-card-chip {
+  border-color: rgba(73, 119, 210, 0.18);
+  background: rgba(73, 119, 210, 0.1);
+  color: #4977d2;
+}
+
+.memo-card:not(.is-complete):nth-child(2n) .memo-card-heading strong {
+  color: #4977d2;
+}
+
+.memo-card-items {
+  display: grid;
+  gap: 11px;
+  border-top: 1px solid var(--line);
+  padding-top: 17px;
+}
+
+.memo-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 22px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 720;
+  text-align: left;
+}
+
+.memo-item > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memo-item.is-complete > span:last-child {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.memo-check {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid rgba(45, 63, 84, 0.18);
+  border-radius: 999px;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.memo-item.is-complete .memo-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.memo-more {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.memo-empty-panel {
+  display: grid;
+  min-height: 300px;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--muted);
+  padding: 26px;
+  text-align: center;
+}
+
+.memo-empty-panel svg {
+  color: var(--accent-strong);
+}
+
+.memo-empty-panel strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.memo-empty-panel span {
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.memo-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(31, 42, 55, 0.18);
+  padding: 24px;
+}
+
+.memo-dialog {
+  display: grid;
+  gap: 22px;
+  width: min(692px, 100%);
+  max-height: min(720px, calc(100dvh - 48px));
+  overflow: auto;
+  border: 1px solid rgba(45, 63, 84, 0.14);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 28px 70px rgba(31, 42, 55, 0.2);
+  padding: 28px;
+}
+
+.memo-dialog-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.memo-dialog-heading h2 {
+  margin: 0 0 7px;
+  font-size: 22px;
+}
+
+.memo-dialog-heading p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.memo-field {
+  display: grid;
+  gap: 10px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.memo-field input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+  padding: 0 14px;
+  outline: none;
+}
+
+.memo-field input:focus {
+  border-color: rgba(18, 185, 129, 0.38);
+  box-shadow: 0 0 0 3px rgba(18, 185, 129, 0.1);
+}
+
+.memo-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 124px;
+  gap: 12px;
+}
+
+.memo-draft-list {
+  display: grid;
+  gap: 10px;
+  min-height: 46px;
+}
+
+.memo-draft-empty,
+.memo-draft-row {
+  display: grid;
+  align-items: center;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(244, 248, 251, 0.86);
+  color: var(--muted);
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.memo-draft-row {
+  grid-template-columns: 18px minmax(0, 1fr) 28px;
+  gap: 12px;
+  color: var(--text);
+}
+
+.memo-draft-row svg {
+  color: var(--accent);
+}
+
+.memo-draft-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memo-draft-row button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.memo-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 8px;
 }
 
 .about-panel {
@@ -1090,28 +1380,32 @@ p {
 
 .timer-overlay-card {
   display: grid;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
+  width: 100%;
+  height: 100%;
   place-items: center;
+  align-content: center;
+  gap: 1px;
   border: 1px solid transparent;
-  border-radius: 22px;
+  border-radius: 12px;
   background: transparent;
   box-shadow: none;
-  padding: 18px;
+  padding: 4px 6px;
   text-align: center;
+  overflow: hidden;
 }
 
 .timer-overlay-card span,
 .timer-overlay-card small {
   color: rgba(31, 42, 55, 0.68);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 760;
+  line-height: 1.15;
   text-shadow: 0 1px 4px rgba(255, 255, 255, 0.78);
 }
 
 .timer-overlay-card strong {
   color: var(--text);
-  font-size: 46px;
+  font-size: 42px;
   line-height: 1;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
@@ -1125,12 +1419,12 @@ p {
 
 .timer-close-button {
   position: absolute;
-  right: 14px;
-  top: 14px;
+  right: 2px;
+  top: 2px;
   z-index: 2;
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   border: 1px solid rgba(45, 63, 84, 0.14);
   border-radius: 999px;
@@ -1162,7 +1456,8 @@ p {
   .tool-header,
   .lens-grid,
   .timer-grid,
-  .about-grid {
+  .about-grid,
+  .memo-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1184,6 +1479,19 @@ p {
   .hotkey-row {
     grid-template-columns: 1fr;
     justify-items: start;
+  }
+
+  .memo-add-row,
+  .memo-dialog-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .memo-add-row {
+    display: grid;
+  }
+
+  .memo-dialog-actions {
+    display: grid;
   }
 }
 
